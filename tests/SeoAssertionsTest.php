@@ -283,6 +283,14 @@ final class SeoAssertionsTest extends TestCase
         $this->assertSitemapComplete();
     }
 
+    public function test_a_failing_status_shows_the_exception_behind_it(): void
+    {
+        $this->withSite(['sitemap' => ['pricing']]);
+
+        $this->assertFailsWith('http://localhost/sitemap.xml answered 500 (expected 200).', fn () => $this->assertSitemapComplete());
+        $this->assertFailsWith('InvalidArgumentException: seo.sitemap: [pricing] is not a route name.', fn () => $this->assertSitemapComplete());
+    }
+
     public function test_without_a_sitemap_it_fails(): void
     {
         $this->assertFailsWith('No sitemap: list pages in seo.sitemap or register Seo::sitemapUsing().', fn () => $this->assertSitemapComplete());

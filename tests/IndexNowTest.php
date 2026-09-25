@@ -45,10 +45,11 @@ final class IndexNowTest extends TestCase
     {
         yield 'crawl host' => ['http://go.test/faq'];
         yield 'noindex host' => ['http://dl.test/'];
-        yield 'a path' => ['/faq'];
+        yield 'a protocol-relative URL' => ['//evil.test/faq'];
         yield 'a host that starts with the site host' => ['http://localhost.evil.test/faq'];
         yield 'the site host in the query' => ['http://evil.test/?h=localhost'];
         yield 'not a URL' => ['http:///faq'];
+        yield 'a host with no scheme' => ['localhost/faq'];
     }
 
     #[DataProvider('validKeys')]
@@ -137,6 +138,15 @@ final class IndexNowTest extends TestCase
             && $request->url() === self::ENDPOINT
             && $request->header('Content-Type') === ['application/json; charset=utf-8']
             && $request->body() === '{"host":"upfiles.com","key":"' . self::KEY . '","keyLocation":"https://upfiles.com/indexnow-key.txt","urlList":["https://upfiles.com/pricing","https://UPFILES.com/faq"]}');
+    }
+
+    public function test_a_path_is_sent_on_the_site_origin(): void
+    {
+        $this->ready(['url' => 'https://upfiles.com']);
+
+        $this->artisan('seo:indexnow', ['url' => ['/pricing', 'https://upfiles.com/faq']])->assertExitCode(0)->run();
+
+        $this->assertSame([['https://upfiles.com/pricing', 'https://upfiles.com/faq']], array_column($this->sent(), 'urlList'));
     }
 
     public function test_urls_are_sent_in_chunks_of_ten_thousand(): void
@@ -245,6 +255,6 @@ final class IndexNowTest extends TestCase
     /** @return list<array<string, mixed>> */
     private function sent(): array
     {
-        return Http::recorded()->map(static fn (array $pair): array => json_decode($pair[0]->body(), true, flags: JSON_THROW_ON_ERROR))->values()->all();
+        return array_values(Http::recorded()->map(static fn (array $pair): array => json_decode($pair[0]->body(), true, flags: JSON_THROW_ON_ERROR))->all());
     }
 }

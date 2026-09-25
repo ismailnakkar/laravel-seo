@@ -14,6 +14,7 @@ use Illuminate\View\Component;
 use Illuminate\View\Factory;
 use JsonSerializable;
 use Seo\HostRole;
+use Seo\Memo;
 use Seo\Robots;
 use Seo\Seo;
 use Seo\Site;
@@ -24,7 +25,7 @@ use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
  * <x-seo::head />, at the top of <head> after charset and viewport. It prints a marker that fill() replaces once the
  * response exists, so a page() or @seo anywhere in the views counts. Robots come from the Page, else from
  * seo.index_by_default; the title and description fall back to the props, then to `@section('title')` and
- * `@section('description')`.
+ * `@section('description')`. An error response (status 400 and up) ignores the Page and renders noindex.
  */
 final class Head extends Component
 {
@@ -48,16 +49,15 @@ final class Head extends Component
         $container = Container::getInstance();
         /** @var Factory $view */
         $view = $container->make('view');
-        $heads = Seo::memo()->heads;
+        $memo = $container->make(Memo::class);
         $request = $container->make('request');
-        // Props, slots and sections are HTML: title="{{ $t }}" and @section('title', $t) have already escaped it.
-        $fallback = static fn (Htmlable|string|null $prop, string $section): ?string => self::first(array_map(
-            static fn (string $html): string => html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8'),
-            [$prop instanceof Htmlable ? $prop->toHtml() : (string)$prop, $view->yieldContent($section)],
-        ));
         // Random, so page content cannot forge the marker.
-        $nonce = $heads[$request][0] ?? bin2hex(random_bytes(8));
-        $heads[$request] = [$nonce, $fallback($this->title, 'title'), $fallback($this->description, 'description')];
+        $nonce = $memo->heads[$request]['nonce'] ?? bin2hex(random_bytes(8));
+        $memo->heads[$request] = [
+            'nonce'       => $nonce,
+            'title'       => self::fallback($this->title, 'title', $view),
+            'description' => self::fallback($this->description, 'description', $view),
+        ];
 
         return new HtmlString("<!--seo-head:{$nonce}-->");
     }
@@ -66,49 +66,57 @@ final class Head extends Component
     public static function fill(SymfonyResponse $response, SymfonyRequest $request): void
     {
         $container = Container::getInstance();
-        $heads = Seo::memo()->heads;
+        $memo = $container->make(Memo::class);
         // A kernel sub-request made while the page rendered has replaced the container's request.
         /** @var Request $request */
-        $request = $request instanceof Request && isset($heads[$request]) ? $request : $container->make('request');
+        $request = $request instanceof Request && isset($memo->heads[$request]) ? $request : $container->make('request');
 
         // JsonResponse, StreamedResponse and BinaryFileResponse are not this class; response($array) is, with a JSON body.
-        if (! isset($heads[$request]) || ! $response instanceof Response || ! str_contains((string)$response->headers->get('Content-Type', 'text/html'), 'html')) {
+        if (! isset($memo->heads[$request]) || ! $response instanceof Response || ! str_contains((string)$response->headers->get('Content-Type', 'text/html'), 'html')) {
             return;
         }
 
-        [$nonce, $title, $description] = $heads[$request];
-        $parts = explode("<!--seo-head:{$nonce}-->", (string)$response->getContent());
+        $head = $memo->heads[$request];
+        $parts = explode("<!--seo-head:{$head['nonce']}-->", (string)$response->getContent());
 
         if (count($parts) === 1) {
             return;
         }
 
-        unset($heads[$request]);
+        unset($memo->heads[$request]);
+        $html = self::build($container->make(Seo::class), $request, $response->getStatusCode() >= 400, $head['title'], $head['description']);
         // setContent() replaces the View that assertViewHas() reads.
         $original = $response->original;
-        $response->setContent(array_shift($parts) . self::build($container->make(Seo::class), $request, $title, $description) . implode('', $parts));
+        $response->setContent(array_shift($parts) . $html . implode('', $parts));
         $response->original = $original;
     }
 
-    private static function build(Seo $seo, Request $request, ?string $titleFallback, ?string $descriptionFallback): string
+    private static function build(Seo $seo, Request $request, bool $error, ?string $titleFallback, ?string $descriptionFallback): string
     {
         $site = $seo->site($request);
-        $page = $seo->pageFor($request);
+        // An error response does not serve the content its Page was set for.
+        $page = $error ? null : $seo->pageFor($request);
 
         $robots = match (true) {
             $site->roleOf($request->getHost()) === HostRole::noindex => Robots::none,
+            $error                                                   => Robots::noindex,
             $page !== null                                           => $page->robots,
             default                                                  => $site->indexByDefault ? Robots::index : Robots::noindex,
         };
         $canonical = $robots->indexable() ? $site->canonical($request, $page) : null;
         $home = $canonical !== null && $site->isHome($canonical);
         $title = self::first([$page?->title, $titleFallback]);
+        $fullTitle = match (true) {
+            $title === null               => $site->name,
+            $page->suffixSiteName ?? true => $title . $site->titleSeparator . $site->name,
+            default                       => $title,
+        };
         $image = $page->image ?? $site->image;
 
         // Rendered here, so Blade cannot merge the component's slots into the view data and shadow $title.
         return view('seo::head', [
             'site'         => $site,
-            'title'        => $title === null ? $site->name : (($page->suffixSiteName ?? true) ? $title . $site->titleSeparator . $site->name : $title),
+            'title'        => $fullTitle,
             'description'  => self::first([$page?->description, $descriptionFallback]),
             'robots'       => $robots,
             'canonical'    => $canonical,
@@ -122,6 +130,15 @@ final class Head extends Component
                 [...($home ? [self::graph($site)] : []), ...($page->jsonLd ?? [])],
             ),
         ])->render();
+    }
+
+    /** Props, slots and sections are HTML: title="{{ $t }}" and @section('title', $t) have already escaped it. */
+    private static function fallback(Htmlable|string|null $prop, string $section, Factory $view): ?string
+    {
+        $prop = $prop instanceof Htmlable ? $prop->toHtml() : (string)$prop;
+        $decode = static fn (string $html): string => html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+
+        return self::first([$decode($prop), $decode($view->yieldContent($section))]);
     }
 
     /**

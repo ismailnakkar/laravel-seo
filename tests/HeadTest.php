@@ -492,16 +492,15 @@ final class HeadTest extends TestCase
         $this->assertStringContainsString('{"@type":"Product","name":"\\u003Cb\\u003E"}', $html);
     }
 
-    /** @return iterable<string, array{array<mixed>}> */
+    /** @return iterable<string, array{mixed}> */
     public static function malformedJsonLd(): iterable
     {
         yield 'a single node not wrapped in a list' => [['@type' => 'FAQPage']];
         yield 'a node already encoded' => [['{"@type":"FAQPage"}']];
     }
 
-    /** @param array<mixed> $jsonLd */
     #[DataProvider('malformedJsonLd')]
-    public function test_malformed_json_ld_throws_at_the_call(array $jsonLd): void
+    public function test_malformed_json_ld_throws_at_the_call(mixed $jsonLd): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('Page::$jsonLd');
@@ -568,7 +567,30 @@ final class HeadTest extends TestCase
     {
         $this->withSite();
 
-        $this->get('/missing')->assertNotFound()->assertSee('<title>Not found · UpFiles</title>', false);
+        $this->get('/missing')
+            ->assertNotFound()
+            ->assertSee('<title>Not found · UpFiles</title>', false)
+            ->assertSee('<meta name="robots" content="noindex, follow">', false)
+            ->assertDontSee('rel="canonical"', false)
+            ->assertDontSee('og:url', false);
+    }
+
+    public function test_an_error_page_ignores_the_page_its_controller_set_before_failing(): void
+    {
+        $this->withSite();
+        Route::get('post', static function (Seo $seo): never {
+            $seo->page(title: 'Deleted post', description: 'Gone.', canonical: '/post/other', jsonLd: [['@type' => 'Article']]);
+            abort(404);
+        });
+
+        $this->get('/post')
+            ->assertNotFound()
+            ->assertSee('<title>Not found · UpFiles</title>', false)
+            ->assertSee('<meta name="robots" content="noindex, follow">', false)
+            ->assertDontSee('name="description"', false)
+            ->assertDontSee('rel="canonical"', false)
+            ->assertDontSee('og:url', false)
+            ->assertDontSee('application/ld+json', false);
     }
 
     public function test_a_json_response_is_left_alone(): void

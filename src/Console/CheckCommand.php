@@ -44,6 +44,8 @@ final class CheckCommand extends Command
     /** Google: "ideally no more than 3". */
     private const int FEW_HOPS = 3;
 
+    private const string UNRESOLVED = 'could not resolve host';
+
     private Factory $http;
 
     /** @var array{FAIL: int, WARN: int, SKIP: int} */
@@ -159,24 +161,34 @@ final class CheckCommand extends Command
         }
 
         [$failure, $index, $locs] = $this->sitemapFile($url, $host, $robots, true);
-        $files = $index && $failure === null ? $locs : [];
-        $sample = $index ? [] : $locs;
-        $count = count($sample);
+
+        if (! $index || $failure !== null) {
+            $this->row('sitemap', $failure === null ? 'PASS' : 'FAIL', $failure ?? "{$url} 200, " . count($locs) . " URLs, all on {$host}");
+
+            // A failed index's locs are files, not pages.
+            return $index ? [] : $locs;
+        }
+
+        $files = $locs;
+        $first = [];
+        $count = 0;
 
         foreach ($files as $i => $file) {
-            [$failure, , $locs] = $this->sitemapFile($file, $host, $robots, false);
-            $sample = $i === 0 ? $locs : $sample;
-            $count += count($locs);
+            [$failure, , $fileLocs] = $this->sitemapFile($file, $host, $robots, false);
+            $count += count($fileLocs);
+
+            if ($i === 0) {
+                $first = $fileLocs;
+            }
 
             if ($failure !== null) {
                 break;
             }
         }
 
-        $in = $index ? ' in ' . count($files) . ' files' : '';
-        $this->row('sitemap', $failure === null ? 'PASS' : 'FAIL', $failure ?? "{$url} 200, {$count} URLs{$in}, all on {$host}");
+        $this->row('sitemap', $failure === null ? 'PASS' : 'FAIL', $failure ?? "{$url} 200, {$count} URLs in " . count($files) . " files, all on {$host}");
 
-        return $sample;
+        return $first;
     }
 
     /** @return array{string|null, bool, list<string>} the failure, whether it is an index, its locs */
@@ -255,6 +267,10 @@ final class CheckCommand extends Command
         $problems = [];
         $passes = [];
 
+        if ($site->name === 'Laravel') {
+            $problems[] = ['WARN', "Site name is Laravel's default: set APP_NAME or seo.name"];
+        }
+
         if (is_string($response) || $response->status() !== 200) {
             $problems[] = ['FAIL', is_string($response) ? "{$url}: {$response}" : "{$url} {$response->status()} (expected 200)"];
         } else {
@@ -304,9 +320,11 @@ final class CheckCommand extends Command
 
     private function crawlers(string $url, Response|string $baseline): void
     {
+        $baseline = self::accepted($baseline);
+
         // A refused baseline cannot tell a bot block from the page.
-        if (($refused = self::refusal($baseline)) !== null) {
-            $this->row('crawlers', 'SKIP', "baseline Chrome got {$refused}");
+        if (is_string($baseline)) {
+            $this->row('crawlers', 'SKIP', "baseline Chrome got {$baseline}");
 
             return;
         }
@@ -315,7 +333,7 @@ final class CheckCommand extends Command
         $clean = true;
 
         foreach (self::AGENTS as $token) {
-            if (($refused = self::refusal($this->fetch($url, "Mozilla/5.0 (compatible; {$token}/1.0)"))) !== null) {
+            if (is_string($refused = self::accepted($this->fetch($url, "Mozilla/5.0 (compatible; {$token}/1.0)")))) {
                 $this->row('crawlers', 'FAIL', "{$token} {$refused} while Chrome gets {$chrome}");
                 $clean = false;
             }
@@ -367,7 +385,7 @@ final class CheckCommand extends Command
             $from = "https://www.{$host}{$path}";
             $response = $this->fetch($from, ParsedPage::CHROME);
 
-            if (is_string($response) && ($response === 'could not resolve host' || str_starts_with($response, 'cURL error 7:'))) {
+            if (is_string($response) && ($response === self::UNRESOLVED || str_starts_with($response, 'cURL error 7:'))) {
                 $this->row('www', 'SKIP', "www.{$host}: {$response}");
 
                 return;
@@ -449,7 +467,7 @@ final class CheckCommand extends Command
             // Before Laravel 13.26, PendingRequest wraps only ConnectException and RequestException.
             $message = $e->getMessage();
 
-            return str_contains($message, 'Could not resolve host') ? 'could not resolve host' : (strstr($message, ' (see ', true) ?: $message);
+            return str_contains($message, 'Could not resolve host') ? self::UNRESOLVED : (strstr($message, ' (see ', true) ?: $message);
         }
     }
 
@@ -477,6 +495,7 @@ final class CheckCommand extends Command
         return match (true) {
             count($page->canonicals) !== 1                    => "{$loc}: " . count($page->canonicals) . ' canonicals in <head> (expected 1)',
             ! ParsedPage::sameUrl($page->canonicals[0], $loc) => "{$loc}: canonical {$page->canonicals[0]} is not the loc",
+            $page->titles > 1                                 => "{$loc}: {$page->titles} <title> elements in <head> (expected 1)",
             in_array('noindex', $page->robots, true)          => "{$loc}: robots meta noindex",
             self::noindex($response)                          => "{$loc}: X-Robots-Tag {$response->header('X-Robots-Tag')}",
             $page->svgOgImage()                               => "{$loc}: og:image {$page->ogImage} is an SVG",
@@ -484,13 +503,10 @@ final class CheckCommand extends Command
         };
     }
 
-    private static function refusal(Response|string $response): ?string
+    /** The 2xx response, or why the request was refused: its error or status. */
+    private static function accepted(Response|string $response): Response|string
     {
-        return match (true) {
-            is_string($response)      => $response,
-            ! $response->successful() => (string)$response->status(),
-            default                   => null,
-        };
+        return is_string($response) || $response->successful() ? $response : (string)$response->status();
     }
 
     /** Header lines kept apart: a `crawler:` scope ends with its line. */

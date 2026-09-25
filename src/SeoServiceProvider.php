@@ -27,7 +27,6 @@ use Seo\Console\InstallCommand;
 use Seo\Http\NoindexHosts;
 use Seo\Http\SetLocale;
 use Seo\View\Head;
-use WeakMap;
 
 /** @internal Registered by package auto-discovery. */
 class SeoServiceProvider extends ServiceProvider
@@ -40,7 +39,7 @@ class SeoServiceProvider extends ServiceProvider
         $this->app->singleton(Seo::class);
         // Scoped, so an Octane request or a queue job (whose console Request is shared) starts empty; keyed by Request
         // within a scope.
-        $this->app->scoped('seo.memo', static fn (): object => (object)['sites' => new WeakMap, 'pages' => new WeakMap, 'heads' => new WeakMap]);
+        $this->app->scoped(Memo::class);
     }
 
     public function boot(Router $router, Dispatcher $events): void
@@ -94,7 +93,13 @@ class SeoServiceProvider extends ServiceProvider
             foreach ($this->getRoutes()->getRoutes() as $route) {
                 $localized = LocalizedRoute::of($route);
 
-                if ($localized !== null && $localized->locale !== $localized->locales->default && $route->uri() !== $localized->locale && ! str_starts_with($route->uri(), "{$localized->locale}/")) {
+                if ($localized === null || $localized->locale === $localized->locales->default) {
+                    continue;
+                }
+
+                $opensWithLocale = $route->uri() === $localized->locale || str_starts_with($route->uri(), "{$localized->locale}/");
+
+                if (! $opensWithLocale) {
                     throw new LogicException("Route::localized(): [{$route->uri()}] puts the locale after a route-level prefix; wrap the routes in Route::prefix(...)->group() instead.");
                 }
             }

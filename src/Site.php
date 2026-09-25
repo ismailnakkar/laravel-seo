@@ -57,9 +57,10 @@ final readonly class Site
         $origin = in_array($scheme, ['http', 'https'], true) && ($parts['host'] ?? '') !== ''
             ? $scheme . '://' . strtolower($parts['host']) . (isset($parts['port']) ? ':' . $parts['port'] : '')
             : null;
+        $host = self::ascii((string)($parts['host'] ?? ''));
 
         // The rebuilt origin must spell the whole value: anything left is a path, query, fragment or userinfo.
-        if ($origin === null || ! in_array(strtolower($url), [$origin, $origin . '/'], true) || str_ends_with($parts['host'], '.') || ($host = self::ascii($parts['host'])) === null) {
+        if ($origin === null || ! in_array(strtolower($url), [$origin, $origin . '/'], true) || str_ends_with($parts['host'], '.') || $host === null) {
             throw new InvalidArgumentException("Site::\$url (seo.url, else app.url) must be an absolute http(s) origin with no path, query, fragment, userinfo or trailing dot, got [{$url}].");
         }
 
@@ -150,7 +151,9 @@ final readonly class Site
     /** No agent is ever named: a named group replaces `*` for it (RFC 9309 §2.2.1). Sitemap line on HostRole::index with a URL only. */
     public function robotsTxt(HostRole $role, ?string $sitemapUrl): string
     {
-        $lines = ['User-agent: *', ...array_map(static fn (string $p): string => rtrim("Disallow: {$p}"), $this->disallow ?: [''])];
+        // An empty Disallow allows everything.
+        $disallow = $this->disallow === [] ? ['Disallow:'] : array_map(static fn (string $p): string => "Disallow: {$p}", $this->disallow);
+        $lines = ['User-agent: *', ...$disallow];
 
         return implode("\n", $role === HostRole::index && $sitemapUrl !== null ? [...$lines, '', "Sitemap: {$sitemapUrl}"] : $lines) . "\n";
     }

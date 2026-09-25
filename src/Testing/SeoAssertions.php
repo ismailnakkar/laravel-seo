@@ -6,6 +6,7 @@ namespace Seo\Testing;
 
 use GuzzleHttp\Psr7\Uri;
 use Illuminate\Testing\TestResponse;
+use Illuminate\Testing\TestResponseAssert;
 use Seo\Console\InstallCommand;
 use Seo\ParsedPage;
 use Seo\Seo;
@@ -45,7 +46,7 @@ trait SeoAssertions
         [$response, $url] = $this->seoChain($url, $maxHops, ParsedPage::GOOGLEBOT);
         $page = ParsedPage::parse((string)$response->getContent());
 
-        $this->assertSame(200, $response->getStatusCode(), "{$url} answered {$response->getStatusCode()} (expected 200).");
+        $this->seoAssertOk($response, "{$url} answered {$response->getStatusCode()} (expected 200).");
         $this->assertFalse(self::seoNoindex($response), "{$url} is noindex (X-Robots-Tag or robots meta).");
         // Before the counts: it explains a tag missing from <head>.
         $this->assertFalse($page->seoTagsInBody, "{$url} has a title, canonical, robots meta or hreflang link in <body>: an element that does not belong in <head> closed it early.");
@@ -96,7 +97,7 @@ trait SeoAssertions
         $body = (string)$response->getContent();
         $site = $this->seoSite();
 
-        $this->assertSame(200, $response->getStatusCode(), "{$url} answered {$response->getStatusCode()}" . ($location === null ? '' : " → {$location}") . ' (expected 200).');
+        $this->seoAssertOk($response, "{$url} answered {$response->getStatusCode()}" . ($location === null ? '' : " → {$location}") . ' (expected 200).');
         $this->assertStringStartsWith('text/plain', (string)$response->headers->get('Content-Type'), "{$url} is not text/plain.");
         $this->assertSame($site->robotsTxt($site->roleOf($host), $this->app->make(Seo::class)->sitemapUrl($site)), $body, "{$url} is not Site::robotsTxt() for its host's role.");
 
@@ -217,7 +218,7 @@ trait SeoAssertions
             $response = $this->seoFetch($href, ParsedPage::GOOGLEBOT, $other === null ? [] : ['Accept-Language' => $other]);
             $page = ParsedPage::parse((string)$response->getContent());
 
-            $this->assertSame(200, $response->getStatusCode(), "{$href}{$asked} answered {$response->getStatusCode()} (expected 200).");
+            $this->seoAssertOk($response, "{$href}{$asked} answered {$response->getStatusCode()} (expected 200).");
             $this->assertTrue(
                 count($page->canonicals) === 1 && ParsedPage::sameUrl($page->canonicals[0], $href),
                 "{$href} is not self-canonical: " . (implode(', ', $page->canonicals) ?: 'no canonical') . '.',
@@ -288,6 +289,16 @@ trait SeoAssertions
         }
     }
 
+    /**
+     * assertStatus()'s wrapper: a 500 also prints the exception behind it.
+     *
+     * @param  TestResponse<Response>  $response
+     */
+    private function seoAssertOk(TestResponse $response, string $message): void
+    {
+        TestResponseAssert::withResponse($response)->assertSame(200, $response->getStatusCode(), $message);
+    }
+
     /** A path resolves the way the test's own get() would resolve it. */
     private function seoAbsolute(string $url): string
     {
@@ -305,7 +316,7 @@ trait SeoAssertions
         $response = $this->seoFetch($url, ParsedPage::GOOGLEBOT);
         $sitemap = ParsedPage::sitemap((string)$response->getContent());
 
-        $this->assertSame(200, $response->getStatusCode(), "{$url} answered {$response->getStatusCode()} (expected 200).");
+        $this->seoAssertOk($response, "{$url} answered {$response->getStatusCode()} (expected 200).");
         $this->assertContains(ParsedPage::mediaType($response->headers->get('Content-Type')), ParsedPage::SITEMAP_TYPES, "{$url} is not application/xml or text/xml.");
         $this->assertNotNull($sitemap, "{$url} is not a sitemaps.org <urlset> or <sitemapindex>.");
 

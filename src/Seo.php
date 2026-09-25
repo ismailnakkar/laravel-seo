@@ -16,7 +16,6 @@ use Illuminate\Support\Arr;
 use InvalidArgumentException;
 use JsonSerializable;
 use LogicException;
-use WeakMap;
 
 /**
  * Builds the Site from config('seo') and holds each request's Page. Not final: apps mock it, and Mockery refuses final
@@ -44,7 +43,7 @@ class Seo
     public function siteUsing(Closure $resolver): void
     {
         $this->siteResolver = $resolver;
-        Container::getInstance()->forgetInstance('seo.memo');
+        Container::getInstance()->forgetInstance(Memo::class);
     }
 
     /** @param Closure $resolver returns an iterable of SitemapEntry, listed first; wins over a seo.sitemap loc it shares */
@@ -73,12 +72,12 @@ class Seo
         ?bool $suffixSiteName = null,
         array $jsonLd = [],
     ): void {
-        $pages = self::memo()->pages;
+        $memo = self::memo();
         $request = Container::getInstance()->make('request');
-        $page = $pages[$request] ?? new Page;
+        $page = $memo->pages[$request] ?? new Page;
         $text = static fn (?string $new, ?string $old): ?string => filled($new) ? $new : $old;
 
-        $pages[$request] = new Page(
+        $memo->pages[$request] = new Page(
             title: $text($title, $page->title),
             description: $text($description, $page->description),
             image: $text($image, $page->image),
@@ -112,11 +111,18 @@ class Seo
             return $build();
         }
 
-        $sites = self::memo()->sites;
+        $memo = self::memo();
         $locale = $app->getLocale();
-        $memo = $sites[$request] ?? null;
+        $cached = $memo->sites[$request] ?? null;
 
-        return $memo !== null && $memo[0] === $locale ? $memo[1] : ($sites[$request] = [$locale, $build()])[1];
+        if ($cached !== null && $cached['locale'] === $locale) {
+            return $cached['site'];
+        }
+
+        $site = $build();
+        $memo->sites[$request] = ['locale' => $locale, 'site' => $site];
+
+        return $site;
     }
 
     /**
@@ -175,11 +181,11 @@ class Seo
     }
 
     /**
-     * @internal One pass, one file in memory: past 50,000 URLs sitemap-1.xml… then sitemap.xml as their index.
+     * One pass, one file in memory: past 50,000 URLs sitemap-1.xml… then sitemap.xml as their index.
      *
      * @return Generator<string, string> file name => XML
      */
-    public function sitemapFiles(?Request $request = null): Generator
+    private function sitemapFiles(?Request $request = null): Generator
     {
         $urls = '';
         $count = 0;
@@ -240,14 +246,9 @@ class Seo
         );
     }
 
-    /**
-     * @internal heads: the pending head's marker nonce, then its title and description fallbacks.
-     *
-     * @return object{sites: WeakMap<Request, array{string, Site}>, pages: WeakMap<Request, Page>, heads: WeakMap<Request, array{string, ?string, ?string}>}
-     */
-    public static function memo(): object
+    private static function memo(): Memo
     {
-        return Container::getInstance()->make('seo.memo');
+        return Container::getInstance()->make(Memo::class);
     }
 
     private function listsSitemap(): bool

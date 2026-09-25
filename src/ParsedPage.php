@@ -115,7 +115,7 @@ final readonly class ParsedPage
      * The X-Robots-Tag directives Googlebot obeys. A `crawler:` prefix scopes the rest of its line, so only unscoped
      * and `googlebot:` directives count.
      *
-     * @param  list<string>  $lines  never joined: a scope ends with its line
+     * @param  array<string>  $lines  never joined: a scope ends with its line
      * @return list<string>
      */
     public static function headerRobots(array $lines): array

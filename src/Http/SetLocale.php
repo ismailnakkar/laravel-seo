@@ -21,7 +21,13 @@ final class SetLocale
 
     public function handle(Request $request, Closure $next): Response
     {
-        $this->app->setLocale((LocalizedRoute::of($request->route()) ?? throw new LogicException('SetLocale is attached by Route::localized() only.'))->locale);
+        $localized = LocalizedRoute::of($request->route());
+
+        if ($localized === null) {
+            throw new LogicException('SetLocale is attached by Route::localized() only.');
+        }
+
+        $this->app->setLocale($localized->locale);
 
         return $next($request);
     }

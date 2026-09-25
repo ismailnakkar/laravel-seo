@@ -125,9 +125,9 @@ to config, a blank one counts as unset.
 - Both run through `Container::getInstance()->call()`, so parameters are injected. `Seo` arrives by method
   injection in a provider's `boot()`.
 
-**Per-request state.** `Seo` is a singleton holding only the two closures. The provider binds a scoped `seo.memo`:
-`(object)['sites' => WeakMap<Request, [locale, Site]>, 'pages' => WeakMap<Request, Page>, 'heads' =>
-WeakMap<Request, [nonce, title fallback, description fallback]>]`.
+**Per-request state.** `Seo` is a singleton holding only the two closures. The provider binds `Seo\Memo`
+(`@internal`) scoped. It holds three `WeakMap`s keyed by Request: `sites` (`array{locale, site}`), `pages` (the merged
+`Page`) and `heads` (`array{nonce, title, description}`: the pending head's marker and fallbacks).
 
 - A scoped binding is forgotten between Octane requests and between queue jobs, whose console Request is shared,
   so nothing leaks from one to the next.
@@ -193,11 +193,16 @@ final Page, the fallbacks and the Site, replaces the first marker, removes the o
 the response's `original` (the View `assertViewHas()` reads) and clears the pending state. A marker rendered outside a
 response (a mail, HTML cached with `view()->render()`) stays a comment.
 
-With `$site = $seo->site($request)` and `$page = $seo->pageFor($request)`:
+**Error responses.** A status of 400 and up ignores the Page, which was set for content the response does not serve
+(a controller that calls `page()`, then `abort(404)`). The head takes the error view's fallbacks and the site image,
+has no `og:url` or JSON-LD, and renders noindex. The error view's own `@seo` is ignored too, since it merges into the
+same Page: an error view titles itself with `@section('title')`.
+
+With `$site = $seo->site($request)`, and `$page = $seo->pageFor($request)`, or null on an error response:
 
 | Output | Rule |
 |---|---|
-| robots | `Robots::none` on a noindex host; else `$page->robots`; else `index_by_default ? Robots::index : Robots::noindex` |
+| robots | `Robots::none` on a noindex host; else `Robots::noindex` on an error response; else `$page->robots`; else `index_by_default ? Robots::index : Robots::noindex` |
 | `<title>`, `og:title` | the first non-blank of `$page->title`, the prop, the section, trimmed; plus `titleSeparator . name` unless `suffixSiteName` is false. None: `name` |
 | description, `og:description` | the first non-blank of `$page->description`, the prop, the section; none: omitted |
 | canonical, hreflang | indexable robots only |
@@ -231,8 +236,10 @@ Route::get('indexnow-key.txt', [SeoController::class, 'indexNowKey'])->name('seo
 
 - Loaded by the provider when `seo.routes` is true, **before** the app's routes, with **no middleware**: no
   session, CSRF, cookies or throttle (crawlers read a 429 as a server error). Global middleware still runs.
-- An app route with the same method and URI and no domain replaces the package's; one inside a `Route::domain()`
-  group does not, since the package's matches first.
+- An app route with the same method and URI and no domain replaces the package's. One inside a `Route::domain()`
+  group matches before the package's on its host on Laravel 13, whose `RouteCollection` puts domain routes first;
+  on Laravel 12 the package's matches first. On Laravel 13 a domain catch-all that matches a dot therefore answers
+  that host's `/robots.txt`.
 - **Maintenance**: the provider always calls `PreventRequestsDuringMaintenance::except(['robots.txt'])`, even with
   `routes` false: RFC 9309 reads a 503 robots.txt as disallow-all.
 - **Cache headers**, success only: `setPrivate()->setMaxAge(3600)->setEtag(xxh128 of the body)`, then
@@ -300,7 +307,8 @@ default outside the codes throw. The default comes from code, never `config('app
 `setLocale()` overwrites.
 
 **`Route::localized(Locales $locales, Closure $routes)`** runs the closure once per code: every other code's copy
-first under a static `{code}` prefix named `seo.{code}.`, then the default's copy bare, each carrying the
+first under a static `{code}` prefix named `seo.{code}.` (after an enclosing `Route::name()` prefix:
+`pages.seo.fr.terms`), then the default's copy bare, each carrying the
 `seo_locale` action marker and `SetLocale`. The default registers last because the first match wins, and a
 default route opening with a parameter (`{page}`, a fallback) would otherwise catch `/fr/…`. It throws inside a
 prefix group or another `Route::localized()`, and on a route-level prefix, which lands before the locale; only the
@@ -308,7 +316,8 @@ finished URIs show that, so the check runs over them.
 
 **`LocalizedRoute::path($path, $code)`** maps this copy's path to another code's (`/fr/terms`, `ar` →
 `/ar/terms`; `/fr`, `en` → `/`). The router matches the decoded path, so the prefix is stripped as it decodes
-(`/%66r%2Fterms` → `/fr/terms`). A path without the prefix throws: a caller bug, never a request.
+(`/%66r%2Fterms` → `/fr/terms`). A path without the prefix throws: a caller bug, never a request. `$code` is not
+checked against the codes, so a caller passing a request value (an app's 301 from a legacy `?lang=`) checks it first.
 
 **Locale resolution.**
 - A `RouteMatched` listener sets the app locale from the copy as soon as the route matches, before
@@ -331,15 +340,16 @@ robots.txt unasked, any other after a confirmation that defaults to no. A failed
 the deletion is a repository change the owner commits.
 
 **`seo:check {url?*} {--link=*} {--sample=5}`**: read-only; every fetch is `withoutRedirecting()`, `timeout(10)`,
-no cookies. URLs default to `Site::$url`, grouped by host; each host's role picks its rows. Rows print as
+no cookies. URLs default to `Site::$url`, grouped by host; each host's role picks its rows. It probes `https://H`,
+`https://www.H` and `http://H`, so it checks a deployed site, never `artisan serve`. Rows print as
 `  {check padded with dots to 16} {PASS|FAIL|WARN|SKIP} {detail}`; exit 1 on any FAIL.
 
 | Row | Role | Rule |
 |---|---|---|
 | `robots.txt` | every | GET `https://H/robots.txt` (Chrome UA): 200, `text/plain`, byte-identical to `Site::robotsTxt($role, sitemapUrl)`. A diff FAILs with the first differing line, quoted with control and non-ASCII octets escaped. |
 | `sitemap` | index | SKIP without a sitemap. `/sitemap.xml`: 200, `application/xml` or `text/xml`, a `<urlset>` or a `<sitemapindex>` whose every file is a `<urlset>`; every entry on H and allowed for Googlebot by the app's body. The first bad file FAILs. |
-| `sample`, `descriptions` | index | `--sample` locs from the urlset or the index's first file (the first, then evenly spaced), as Googlebot smartphone: 200, one canonical equal to the loc, no noindex meta or header (read as Googlebot reads it), no SVG `og:image`. A page without a description WARNs. |
-| `home` | index | A WebSite JSON-LD node named `Site::$name` (FAIL); a set logo answering 200 as PNG, JPEG, WebP, GIF, AVIF, BMP or SVG and allowed for Googlebot (FAIL); a title without the name WARNs. |
+| `sample`, `descriptions` | index | `--sample` locs from the urlset or the index's first file (the first, then evenly spaced), as Googlebot smartphone: 200, one canonical equal to the loc, at most one `<title>` in `<head>`, no noindex meta or header (read as Googlebot reads it), no SVG `og:image`. A page without a description WARNs. |
+| `home` | index | A WebSite JSON-LD node named `Site::$name` (FAIL); a set logo answering 200 as PNG, JPEG, WebP, GIF, AVIF, BMP or SVG and allowed for Googlebot (FAIL); a title without the name WARNs; a name still Laravel's default `Laravel` WARNs, checked before the fetch so it shows while the page is down. |
 | `crawlers` | index | OAI-SearchBot, Claude-SearchBot, PerplexityBot, DuckAssistBot, Amzn-SearchBot, meta-webindexer, MistralAI-Index and Claude-User, UA `Mozilla/5.0 (compatible; {token}/1.0)`, each get a 2xx; a fetch error or non-2xx FAILs. SKIP when the Chrome baseline is refused. Search engines are verified by IP, so they are not probed. |
 | `http` | every | `http://H/` answers one 301 or 308 to `https://H/` or `Site::to('/')`. |
 | `www` | hosts not starting `www.` | `https://www.H/`, and on the index host its first non-root sitemap path, answer one 301 or 308 to the same path on H or on `Site::$url`. SKIP when www does not resolve or connect. |
@@ -350,11 +360,12 @@ A `Location` is resolved as a browser resolves it. The rows judge by the app's b
 the robots.txt row passes. It judges against the local Site, so it runs wherever that resolves to production's
 values (process env over `.env`, config uncached), never on the production box.
 
-**`seo:indexnow {url?*} {--all}`**: URLs, or `--all` (every `Seo::sitemap()` loc, deduplicated, plus any URLs given;
-meant for a migration or redesign only). Exits 1 and sends nothing when there are no URLs, the key is missing or
-malformed, the `seo.indexnow` route is not registered, a URL is off `Site::host()`, or `--all` finds none. Chunks
-of 10,000 are posted to `https://api.indexnow.org/IndexNow` as `{host, key, keyLocation, urlList}`; 200 and 202
-print PASS, anything else or a connection error prints FAIL and exits 1 while later chunks still go.
+**`seo:indexnow {url?*} {--all}`**: URLs or paths, each through `Site::to()` first, so a path lands on `Site::$url`;
+or `--all` (every `Seo::sitemap()` loc plus any given, deduplicated; meant for a migration or redesign only). Exits 1
+and sends nothing when there are no URLs, the key is missing or malformed, the `seo.indexnow` route is not registered,
+a URL is off `Site::host()`, or `--all` finds none. Chunks of 10,000 are posted to `https://api.indexnow.org/IndexNow`
+as `{host, key, keyLocation, urlList}`; 200 and 202 print PASS, anything else or a connection error prints FAIL and
+exits 1 while later chunks still go.
 
 ### 4.9 Testing helpers
 
@@ -362,6 +373,9 @@ print PASS, anything else or a connection error prints FAIL and exits 1 while la
 first (the kernel shares both, so a login on one hop would hide a loop on the next), and the test's default
 headers, cookies, server variables and `followingRedirects()` neither leak in nor change.
 
+- A fetch that must answer 200 (`assertCrawlable`, `robotsTxt`, `assertHreflangReciprocal`, each sitemap file) asserts
+  the status through Laravel's `TestResponseAssert`, as `assertStatus()` does, so the failure message also carries
+  the exception behind it.
 - `followRedirectChain`: fails with the whole chain on a revisited URL or past `$maxHops`; an unparseable Location
   fails naming it.
 - `assertCrawlable`: the final response is 200, not noindex, and after an HTML5 parse has exactly one `<title>` and
@@ -399,12 +413,13 @@ valued directives are never read as a crawler), `sitemap()` (root and locs, or n
 
 ## 5. Package test plan
 
-`vendor/bin/phpunit` (or `composer check`) on PHP 8.4+. `tests/TestCase.php` registers the provider, flushes the
-static maintenance exemptions before each test, prevents stray HTTP, and sets `app.url` to `http://localhost`, the
-index host. `withSite()` sets `seo.*` (name `UpFiles`, image `/img/og-image.png`, disallow `/admin/`, noindex host
-`dl.test`); every other host such as `go.test` crawls. The fixture pages (`/`, `/faq`, `/payment-proof`,
-`/reset-password`) run in Testbench's `web` group; the package routes run in no group. `visit($url, ?Page, ?title)` renders a page whose controller spreads the Page into `page()`;
-`withLocales()` registers the same pages in `Route::localized()`; `withSitemap()` sets a resolver.
+`vendor/bin/phpunit` on PHP 8.4+; `composer check` also runs `pint --test` and Larastan at level 7 over `src` and
+`tests` (`composer analyse`). `tests/TestCase.php` registers the provider, flushes the static maintenance exemptions
+before each test, prevents stray HTTP, and sets `app.url` to `http://localhost`, the index host. `withSite()` sets
+`seo.*` (name `UpFiles`, image `/img/og-image.png`, disallow `/admin/`, noindex host `dl.test`); every other host such
+as `go.test` crawls. The fixture pages (`/`, `/faq`, `/payment-proof`, `/reset-password`) run in Testbench's `web`
+group; the package routes run in no group. `visit($url, ?Page, ?title)` renders a page whose controller spreads the
+Page into `page()`; `withLocales()` registers the same pages in `Route::localized()`; `withSitemap()` sets a resolver.
 
 Exact outputs are pinned by HeadTest, RobotsTxtTest, SitemapTest, IndexNowTest and CheckCommandTest.
 

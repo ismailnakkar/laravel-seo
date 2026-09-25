@@ -11,6 +11,7 @@ use Illuminate\Foundation\Http\Middleware\PreventRequestsDuringMaintenance;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Testing\PendingCommand;
 use Illuminate\Testing\TestResponse;
 use Orchestra\Testbench\TestCase as BaseTestCase;
 use Seo\Locales;
@@ -100,6 +101,20 @@ abstract class TestCase extends BaseTestCase
         $this->fixtureTitle = $title;
 
         return $this->get($url);
+    }
+
+    /**
+     * Laravel returns PendingCommand|int; the console output is always mocked here.
+     *
+     * @param  string  $command
+     * @param  array<string, mixed>  $parameters
+     */
+    public function artisan($command, $parameters = []): PendingCommand
+    {
+        $pending = parent::artisan($command, $parameters);
+        assert($pending instanceof PendingCommand);
+
+        return $pending;
     }
 
     protected function seo(): Seo

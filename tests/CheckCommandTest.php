@@ -246,6 +246,10 @@ final class CheckCommandTest extends TestCase
             static fn (): PromiseInterface => self::html(self::page('https://upfiles.com/faq', ['<title>' => '<link rel="canonical" href="https://upfiles.com/faq"><title>'])),
             'https://upfiles.com/faq: 2 canonicals in <head> (expected 1)',
         ];
+        yield 'a second title left by a migration' => [
+            static fn (): PromiseInterface => self::html(self::page('https://upfiles.com/faq', ['<title>' => '<title>FAQ | Old Site</title><title>'])),
+            'https://upfiles.com/faq: 2 <title> elements in <head> (expected 1)',
+        ];
         yield 'canonical pushed into body' => [
             static fn (): PromiseInterface => self::html(self::page('https://upfiles.com/faq', ['<title>' => '<div></div><title>'])),
             'https://upfiles.com/faq: 0 canonicals in <head> (expected 1)',
@@ -378,6 +382,19 @@ final class CheckCommandTest extends TestCase
         [, $output] = $this->check();
 
         $this->assertRow('  home ........... PASS title contains "UpFiles"; WebSite.name "UpFiles"', $output);
+    }
+
+    public function test_a_home_page_warns_while_the_site_name_is_laravels_default(): void
+    {
+        config(['app.name' => 'Laravel']);
+        $this->withUpfiles(['name' => null]);
+        $this->fakeLive([self::HOME => self::html(self::page(self::HOME, ['UpFiles' => 'Laravel']))]);
+
+        [$code, $output] = $this->check();
+
+        $this->assertRow("  home ........... WARN Site name is Laravel's default: set APP_NAME or seo.name", $output);
+        $this->assertSame(1, substr_count($output, '  home ...'));
+        $this->assertSame(0, $code);
     }
 
     /** @return iterable<string, array{string, Closure(): PromiseInterface, bool, string}> Site::$logo, the live logo, whether the policy disallows /img/, the row */

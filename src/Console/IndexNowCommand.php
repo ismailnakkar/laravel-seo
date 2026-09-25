@@ -46,6 +46,9 @@ final class IndexNowCommand extends Command
             $this->fail('The key file route is not registered: set seo.routes to true, or name your own key route seo.indexnow.');
         }
 
+        // Only a path lands on the origin: `example.com/x`, with no scheme, is not one and fails the host check.
+        $urls = array_map(static fn (string $url): string => str_starts_with($url, '/') ? $site->to($url) : $url, $urls);
+
         if ($this->option('all')) {
             foreach ($seo->sitemap() as $entry) {
                 $urls[] = $entry->loc;

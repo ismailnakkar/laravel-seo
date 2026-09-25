@@ -7,19 +7,17 @@ crawler-style test assertions and `seo:check`, a live audit.
 
 ## Install
 
-Requires PHP 8.4 with ext-dom, and Laravel 12.61.1+ or 13.12+. It is not on Packagist yet, so first add
-`{"type": "vcs", "url": "https://github.com/ismailnakkar/laravel-seo.git"}` to `repositories` in your
-`composer.json`:
+Requires PHP 8.4+ and Laravel 12.61.1+ or 13.12+.
 
 ```bash
-composer require ismailnakkar/laravel-seo:dev-main
+composer require ismailnakkar/laravel-seo
 php artisan seo:install
 ```
 
 `seo:install` publishes `config/seo.php` and deletes `public/robots.txt`, `public/sitemap.xml` and
-`public/indexnow-key.txt`, which the web server would serve instead of the package's routes. It asks
-first, except for Laravel's stock robots.txt. Commit the deletion. `APP_URL`, or `url` in the config,
-must be the public origin, such as `https://example.com`.
+`public/indexnow-key.txt`, which the web server would serve instead. It asks first, except for Laravel's stock
+robots.txt. Commit the deletion, and delete your own robots.txt and sitemap routes, which replace the
+package's. `APP_URL`, or `url` in the config, must be the public origin, such as `https://example.com`.
 
 Render the head at the top of `<head>`, after charset and viewport, and delete the layout's own `<title>`,
 description, robots, canonical and Open Graph tags:
@@ -78,25 +76,23 @@ field, so the later call wins (a view's `@seo` runs after its controller), a bla
 | `title` | prop, section, `name` | `<title>` and `og:title`, suffixed with `title_separator` and `name`. |
 | `description` | prop, section, none | The meta description and `og:description`. |
 | `image` | config `image` | This page's `og:image`, a URL or a path on `url`. Its alt is the page title. |
-| `canonical` | the request path on `url` | An absolute http(s) URL or a root-relative path. Replaces the canonical and drops hreflang; on a noindex page, sets `og:url` only. |
-| `robots` | `Robots::index` | `Robots::index`, `Robots::noindex` (`noindex, follow`) or `Robots::none` (`noindex, nofollow`). In a view, write `\Seo\Robots::noindex`. |
+| `canonical` | the request path on `url` | An absolute http(s) URL or, best, a root-relative path, which lands on `url` whatever host served the request. Replaces the canonical and drops hreflang; on a noindex page, sets `og:url` only. |
+| `robots` | `Robots::index` | `Robots::index` (`max-image-preview:large`), `Robots::noindex` (`noindex, follow`) or `Robots::none` (`noindex, nofollow`). In a view, write `\Seo\Robots::noindex`. |
 | `paginated` | `false` | Keep `?page=N` (N ≥ 2) in the canonical. |
 | `suffixSiteName` | `true` | `false` leaves the title unsuffixed, such as a home page's. |
-| `jsonLd` | `[]` | schema.org nodes, arrays or `JsonSerializable`, one script each. |
+| `jsonLd` | `[]` | schema.org nodes, arrays or any `JsonSerializable` such as a spatie/schema-org type, one script each. The home page also gets Organization and WebSite. |
 
-- **The head is filled into the HTTP response.** `<x-seo::head />` prints an HTML comment, replaced once the
-  response exists; a call after that, such as in middleware after `$next()`, has no effect. HTML rendered to
-  a string and sent later or never (a string cache's hits, a mail, a PDF, `artisan down --render`) keeps the
-  comment: cache the response in route middleware instead. On an error page thrown inside a route, route
-  middleware still sees the comment. A published head view renders after the page, so it gets only the
-  head's variables: no sections, stacks or component attributes.
+- **The head is filled into the HTTP response**, replacing the comment `<x-seo::head />` prints; a call after
+  that, such as in middleware after `$next()`, is lost. HTML rendered to a string and sent later or never (a
+  string cache's hits, a mail, a PDF, `artisan down --render`) keeps the comment: cache the response in route
+  middleware, which still sees the comment on an error page thrown inside a route. A published head view
+  renders after the page: it gets only the head's variables, no sections, stacks or component attributes.
 - **A section must exist when the head renders**, as a child view's does under `@extends`. `@seo` has no
   such limit.
-- **A canonical is best a path**, which lands on `url` whatever host served the request.
 - **A paginated listing** passes `paginated: true` and answers 404 past its last page. Every other query
   parameter is dropped from the canonical.
-- **`jsonLd`** takes any `JsonSerializable`, such as a spatie/schema-org type. The home page also gets
-  Organization and WebSite.
+- **Error pages** (4xx, 5xx) render noindex and ignore `page()` and `@seo`, the error view's own included: title
+  an error view with `@section('title')`.
 - **Utility pages** use `Robots::noindex`: password reset, email verification, and any URL with a token in
   its path. A page linking to user-submitted URLs, such as a link interstitial, uses `Robots::none`.
 
@@ -116,8 +112,7 @@ $seo->sitemapUsing(function (): iterable {
 
 - Resolver entries come first, and one with the same URL as a config value replaces it.
 - Set `lastModified` only to the content's real last change, never `now()`.
-- `/sitemap.xml` is built on each request: one urlset up to 50,000 URLs, past that an index of `/sitemap-1.xml`,
-  `/sitemap-2.xml`…
+- `/sitemap.xml` is built per request: one urlset up to 50,000 URLs, past that an index of `/sitemap-{n}.xml`.
 - With nothing configured, `/sitemap.xml` answers 404 and robots.txt names no sitemap.
 
 ## robots.txt
@@ -144,6 +139,8 @@ Sitemap: https://example.com/sitemap.xml
   in the http block, and `add_header X-Robots-Tag $seo_noindex always;` in the server block.
 - Redirect www and alias hosts to `url` with one 301 that keeps path and query: at the edge (a Cloudflare
   redirect rule or nginx), or in a global middleware.
+- On Laravel 13, a route inside `Route::domain()` matches before the package's on that host (on 12, after it),
+  so keep a domain catch-all from matching a dot: `->where('slug', '[^.]+')`.
 
 ## Languages
 
@@ -161,16 +158,21 @@ it, every copy emits the same hreflang set with x-default, and a sitemap entry e
   `Route::prefix()->group()`, never a route-level `->prefix()`.
 - Put in only pages whose content is translated, plus their forms' POST routes.
 - Pass the default from code, never `config('app.locale')`.
-- Copies are named `seo.{code}.{name}`: check `Route::is('terms', 'seo.*.terms')`.
+- Link with `route()`: `url()` and hard-coded paths go to the default copy.
+- A language switcher, after `@inject('seo', \Seo\Seo::class)`, links each code but `x-default` to its URL in
+  `$seo->site(request())->alternates(request(), $seo->pageFor(request()))`, `[]` outside `Route::localized()`.
+- To 301 old query-parameter URLs (`/terms?lang=fr` to `/fr/terms`), redirect to
+  `\Seo\LocalizedRoute::of($request->route())?->path($request->getPathInfo(), $code)`, with `$code` checked
+  against your codes first: `?lang=/evil.test` would otherwise redirect off-site.
 - Your layout renders `<html lang>` from `app()->getLocale()`.
 
 ## IndexNow
 
 Set `INDEXNOW_KEY` to 8 to 128 letters, digits or dashes, such as `bin2hex(random_bytes(16))`;
-`/indexnow-key.txt` serves it. After a deploy, submit the URLs that changed, all on the site's host:
+`/indexnow-key.txt` serves it. After a deploy, submit what changed, as paths or URLs on the site's host:
 
 ```bash
-php artisan seo:indexnow https://example.com/pricing https://example.com/blog/new-post
+php artisan seo:indexnow /pricing /blog/new-post
 php artisan seo:indexnow --all   # every sitemap URL: only after a migration or redesign
 ```
 
@@ -182,12 +184,12 @@ cookies, so `actingAs()` neither reaches a helper nor survives one. Assert head 
 
 ```php
 $this->assertSitemapComplete();
-$this->get('/plans')->assertMovedPermanently()->assertRedirect('/pricing');
+$this->assertTrue($this->robotsTxt('example.com')->allows('Googlebot', '/pricing'));
 ```
 
 | Method | Asserts |
 |---|---|
-| `robotsTxt($host)` | `http://{host}/robots.txt` answers 200 `text/plain` with the body your config renders. Returns a matcher: `->allows('Googlebot', '/path')`. |
+| `robotsTxt($host)` | `http://{host}/robots.txt` answers 200 `text/plain` with the body your config renders. Returns a matcher whose `allows($token, $path)` returns a bool. |
 | `followRedirectChain($url, $maxHops = 10, $userAgent = Googlebot, $headers = [])` | Follows redirects as Googlebot, or `$userAgent`, failing on a loop or past `$maxHops`. Returns the last response. |
 | `assertCrawlable($url, $maxHops = 3)` | 200, not noindex, one `<title>` and one self-referencing canonical in `<head>`, no SVG `og:image`. |
 | `assertNotIndexable($response)` | The `X-Robots-Tag` or robots meta says noindex. |
@@ -198,19 +200,21 @@ $this->get('/plans')->assertMovedPermanently()->assertRedirect('/pricing');
 
 ## seo:check
 
-It fetches the live site as a crawler does, without cookies or following redirects, and exits 1 on any
+Run it against the deployed site: it fetches `https://{host}`, `https://www.{host}` and `http://{host}` as a
+crawler does, without cookies or following redirects, so it cannot check `artisan serve`. It exits 1 on any
 FAIL. It judges against your local config, so run it with production's values and config uncached:
 
 ```bash
 APP_URL=https://example.com php artisan seo:check https://example.com https://dl.example.com --link=https://example.com/go/abc
+docker compose exec -u sail -e APP_URL=https://example.com laravel.test php artisan seo:check https://example.com  # Sail
 ```
 
 | Row | Checks |
 |---|---|
 | `robots.txt` | 200 `text/plain`, byte-identical to the app's body. A FAIL names the first differing line. |
 | `sitemap` | XML whose URLs are all on the host and allowed by robots.txt. |
-| `sample`, `descriptions` | `--sample` sitemap URLs (default 5) are 200, self-canonical and indexable. One without a description WARNs. |
-| `home` | WebSite JSON-LD carries `name`, and the logo loads. A title without `name` WARNs. |
+| `sample`, `descriptions` | `--sample` sitemap URLs (default 5) are 200, self-canonical and indexable, with no second `<title>`. One without a description WARNs. |
+| `home` | WebSite JSON-LD carries `name`, and the logo loads. A title without `name`, or `name` left at Laravel's default `Laravel`, WARNs. |
 | `crawlers` | AI search agents (OAI-SearchBot, Claude-SearchBot, PerplexityBot…) get Chrome's 2xx. Indicative only: the user agent is spoofed. |
 | `http`, `www` | `http://` and `www.` answer one 301 or 308 to the right host. |
 | `x-robots-tag` | A noindex host's `/` carries noindex. A static file without it WARNs: see [Hosts](#hosts). |
@@ -240,5 +244,7 @@ the head through `<x-seo::head :title="$title ?? null" />`. Inertia gets the ser
 - `changefreq`, `priority`, sitemap pings, `rel=next/prev` and meta keywords: Google and Bing ignore them.
 - Snippet limits (`nosnippet`, `max-snippet`, `noarchive`): they only take visibility away.
 - `og:locale` and `twitter:*` tags beyond `twitter:card`: no search effect, and X falls back to Open Graph.
+- Bing's `msvalidate.01` (verify Bing by importing the site from Search Console) and subdirectory installs:
+  `url` must be a bare origin.
 - Typed schema.org helpers (pass `jsonLd` nodes), www and alias-host redirects, redirects by language,
   translated slugs and a queued IndexNow job.
