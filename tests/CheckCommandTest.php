@@ -13,9 +13,11 @@ use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Route;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Seo\HostRole;
 use Seo\ParsedPage;
+use Seo\Tests\Fixtures\User;
 
 final class CheckCommandTest extends TestCase
 {
@@ -702,6 +704,59 @@ final class CheckCommandTest extends TestCase
 
             TXT, $output);
         $this->assertSame(1, $code);
+    }
+
+    public function test_the_language_config_is_checked_where_boot_cannot(): void
+    {
+        $this->fakeLive();
+        config([
+            'seo.entry_redirect'         => ['home', 'nope'],
+            'seo.user_locale'            => 'locale',
+            'auth.providers.users.model' => User::class,
+        ]);
+        $this->withLocalizedRoutes(['en', 'fr'], static fn () => Route::get('/', static fn () => 'home')->name('home'));
+        $this->createUsersTable();
+
+        [$code, $output] = $this->check();
+
+        $this->assertStringContainsString(<<<'TXT'
+            languages
+              entry_redirect . PASS home
+              entry_redirect . FAIL [nope] is not the name of a Route::localized() route
+              user_locale .... PASS users.locale
+
+            TXT, $output);
+        $this->assertSame(1, $code);
+
+        config(['seo.user_locale' => 'missing']);
+        [, $output] = $this->check();
+
+        $this->assertStringContainsString('  user_locale .... FAIL users has no column [missing]', $output);
+    }
+
+    public function test_the_user_column_warns_when_the_database_cannot_be_reached(): void
+    {
+        $this->fakeLive();
+        config([
+            'database.connections.gone'  => ['driver' => 'sqlite', 'database' => '/nonexistent/seo.sqlite', 'prefix' => ''],
+            'database.default'           => 'gone',
+            'seo.user_locale'            => 'locale',
+            'auth.providers.users.model' => User::class,
+        ]);
+        $this->withLocalizedRoutes(['en', 'fr'], static fn () => Route::get('/', static fn () => 'home'));
+
+        [, $output] = $this->check();
+
+        $this->assertStringContainsString('  user_locale .... WARN could not reach the database to check users.locale', $output);
+    }
+
+    public function test_one_language_prints_no_languages_block(): void
+    {
+        $this->fakeLive();
+
+        [, $output] = $this->check();
+
+        $this->assertStringNotContainsString('languages', $output);
     }
 
     /**

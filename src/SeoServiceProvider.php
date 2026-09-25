@@ -17,6 +17,7 @@ use Illuminate\Routing\Events\RouteMatched;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 use Illuminate\Routing\UrlGenerator;
+use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Arr;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\View\Compilers\BladeCompiler;
@@ -25,7 +26,7 @@ use Seo\Console\CheckCommand;
 use Seo\Console\IndexNowCommand;
 use Seo\Console\InstallCommand;
 use Seo\Http\NoindexHosts;
-use Seo\Http\SetLocale;
+use Seo\Http\ResolveLocale;
 use Seo\View\Head;
 
 /** @internal Registered by package auto-discovery. */
@@ -40,9 +41,26 @@ class SeoServiceProvider extends ServiceProvider
         // Scoped, so an Octane request or a queue job (whose console Request is shared) starts empty; keyed by Request
         // within a scope.
         $this->app->scoped(Memo::class);
+
+        // Set on match: SubstituteBindings binds a translated slug under it, and a localized route outside `web` still
+        // gets its locale. In register(), so providers' boot-time listeners (an error tracker) see the locale and name.
+        $this->app->make(Router::class)->matched(static function (RouteMatched $event): void {
+            if (($localized = LocalizedRoute::of($event->route)) === null) {
+                return;
+            }
+
+            /** @var Application $app */
+            $app = Container::getInstance(); // under Octane, the request's sandbox
+            $app->setLocale($localized->locale);
+
+            if ($localized->locale !== $localized->locales->default) {
+                // Stored as seo.{code}.name, unique for route:cache; the matched copy answers to the route's own name.
+                $event->route->action['as'] = $localized->name($event->route);
+            }
+        });
     }
 
-    public function boot(Router $router, Dispatcher $events): void
+    public function boot(Dispatcher $events): void
     {
         $this->loadViewsFrom(__DIR__ . '/../resources/views', 'seo');
         $this->publishes([__DIR__ . '/../config/seo.php' => $this->app->configPath('seo.php')], 'seo-config');
@@ -60,6 +78,19 @@ class SeoServiceProvider extends ServiceProvider
         // Global, so a noindex host's redirects, 404s and files carry the header too. Skipped when already listed.
         $this->callAfterResolving(Kernel::class, static fn (HttpKernel $kernel) => $kernel->pushMiddleware(NoindexHosts::class));
 
+        if (Locales::configured() !== null) {
+            // Straight after StartSession: CSRF, signature, throttle and auth refusals then speak the visitor's language.
+            $this->callAfterResolving(Kernel::class, static function (HttpKernel $kernel): void {
+                if (array_key_exists('web', $kernel->getMiddlewareGroups())) {
+                    $kernel->appendMiddlewareToGroup('web', ResolveLocale::class)
+                        ->addToMiddlewarePriorityAfter(StartSession::class, ResolveLocale::class);
+                }
+            });
+
+            // Whatever `routes` says: this is the language switcher, not a crawler file.
+            $this->loadRoutesFrom(__DIR__ . '/../routes/locale.php');
+        }
+
         // A 503 robots.txt reads as disallow-all, whoever serves it.
         PreventRequestsDuringMaintenance::except(['robots.txt']);
 
@@ -68,8 +99,22 @@ class SeoServiceProvider extends ServiceProvider
             $this->loadRoutesFrom(__DIR__ . '/../routes/seo.php');
         }
 
-        Router::macro('localized', function (Locales $locales, Closure $routes): void {
+        // mixed, not Closure: a v0.2 call, Locales first, gets this message instead of a TypeError.
+        Router::macro('localized', function (mixed $routes): void {
+            if (! $routes instanceof Closure) {
+                throw new LogicException("Route::localized() takes only the routes closure since v0.3: set the languages in config('seo.locales') as code => name, default first.");
+            }
+
             /** @var Router $this */
+            $locales = Locales::configured();
+
+            // One language: plain routes, no copies and no marker.
+            if ($locales === null) {
+                $this->group([], $routes);
+
+                return;
+            }
+
             $last = $this->hasGroupStack() ? Arr::last($this->getGroupStack()) : [];
 
             if (trim($this->getLastGroupPrefix(), '/') !== '' || isset($last[LocalizedRoute::ACTION])) {
@@ -79,10 +124,7 @@ class SeoServiceProvider extends ServiceProvider
             // Default last: first match wins, and a default route opening with a parameter ({page}) would catch /fr/…
             foreach ([...array_diff($locales->codes, [$locales->default]), $locales->default] as $code) {
                 // A plain action key, not Route::metadata(): it survives group merging and route:cache on Laravel 12.
-                $group = [
-                    LocalizedRoute::ACTION => ['codes' => $locales->codes, 'default' => $locales->default, 'locale' => $code],
-                    'middleware'           => [SetLocale::class],
-                ];
+                $group = [LocalizedRoute::ACTION => ['codes' => $locales->codes, 'default' => $locales->default, 'locale' => $code]];
                 // Name-prefixed copies: route:cache throws on duplicate names, but tolerates an unnamed route's
                 // bare `seo.{code}.`.
                 $this->group($code === $locales->default ? $group : $group + ['prefix' => $code, 'as' => "seo.{$code}."], $routes);
@@ -102,16 +144,6 @@ class SeoServiceProvider extends ServiceProvider
                 if (! $opensWithLocale) {
                     throw new LogicException("Route::localized(): [{$route->uri()}] puts the locale after a route-level prefix; wrap the routes in Route::prefix(...)->group() instead.");
                 }
-            }
-        });
-
-        // SubstituteBindings (in `web`) runs before SetLocale: set the locale on match so a translated slug binds
-        // under it.
-        $router->matched(static function (RouteMatched $event): void {
-            if (($localized = LocalizedRoute::of($event->route)) !== null) {
-                /** @var Application $app */
-                $app = Container::getInstance(); // under Octane, the request's sandbox
-                $app->setLocale($localized->locale);
             }
         });
 

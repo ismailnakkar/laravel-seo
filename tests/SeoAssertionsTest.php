@@ -15,7 +15,6 @@ use Illuminate\Support\Facades\Route;
 use PHPUnit\Framework\AssertionFailedError;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
-use Seo\Locales;
 use Seo\Page;
 use Seo\ParsedPage;
 use Seo\Robots;
@@ -253,7 +252,7 @@ final class SeoAssertionsTest extends TestCase
     public function test_hreflang_alternates_may_share_a_title_and_description(): void
     {
         // Uniqueness holds per <html lang>: a cognate (FAQ) is right in every language.
-        $this->withLocales(['en', 'fr'], 'en');
+        $this->withLocales(['en', 'fr']);
         $this->fixturePage = static fn (): Page => new Page(title: 'FAQ', description: 'Questions and answers.');
         $this->withSitemap([new SitemapEntry('/faq', new DateTimeImmutable('2026-09-01T08:00:00+00:00'))]);
 
@@ -371,8 +370,8 @@ final class SeoAssertionsTest extends TestCase
 
     public function test_assert_hreflang_reciprocal_fails_when_a_copy_renders_the_accept_language_locale(): void
     {
-        // Route middleware inside the closure runs after SetLocale and overrides it.
-        $this->withLocalizedRoutes(new Locales(['en', 'fr', 'ar', 'es'], 'en'), function (Router $router): void {
+        // Route middleware inside the closure runs after the match set the URL's locale, and overrides it.
+        $this->withLocalizedRoutes(['en', 'fr', 'ar', 'es'], function (Router $router): void {
             $router->middleware(NegotiateLocale::class)->get('negotiated', function () {
                 $this->seo()->page(title: 'Terms');
 

@@ -6,19 +6,17 @@ namespace Seo\Tests;
 
 use Closure;
 use Illuminate\Contracts\Http\Kernel;
-use Illuminate\Foundation\Events\LocaleUpdated;
 use Illuminate\Routing\Route as RoutingRoute;
 use Illuminate\Routing\RouteCollection;
-use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\URL;
 use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
-use Seo\Http\SetLocale;
 use Seo\Locales;
 use Seo\LocalizedRoute;
 use Seo\SeoServiceProvider;
 use Seo\Tests\Fixtures\EarlierFormatterProvider;
+use Seo\Tests\Fixtures\EarlierListenerProvider;
 use Seo\Tests\Fixtures\LocalizedController;
 use Seo\Tests\Fixtures\NegotiateLocale;
 
@@ -26,7 +24,7 @@ final class LocalizedRoutesTest extends TestCase
 {
     protected function getPackageProviders($app): array
     {
-        return [EarlierFormatterProvider::class, SeoServiceProvider::class];
+        return [EarlierFormatterProvider::class, EarlierListenerProvider::class, SeoServiceProvider::class];
     }
 
     public function test_the_default_keeps_its_uris_and_names_and_every_other_code_gets_a_prefixed_copy(): void
@@ -34,7 +32,7 @@ final class LocalizedRoutesTest extends TestCase
         // Else the fixture's '/' keeps its early slot when the default copy overwrites it.
         Route::setRoutes(new RouteCollection);
         $locales = new Locales(['en', 'fr', 'zh-Hant'], 'en');
-        $this->withLocalizedRoutes($locales, static function (): void {
+        $this->withLocalizedRoutes($locales->codes, static function (): void {
             Route::get('/', static fn () => 'home')->name('home');
             // A prefix group inside the closure is fine: it merges the marker in unchanged.
             Route::name('pages.')->prefix('legal')->middleware('throttle:60,1')->group(static function (): void {
@@ -59,29 +57,30 @@ final class LocalizedRoutesTest extends TestCase
         $route = Route::getRoutes()->getByName('seo.fr.pages.terms');
         $this->assertEquals(new LocalizedRoute($locales, 'fr'), LocalizedRoute::of($route));
         $this->assertEquals(new LocalizedRoute($locales, 'en'), LocalizedRoute::of(Route::getRoutes()->getByName('pages.terms')));
-        $this->assertSame(['web', SetLocale::class, 'throttle:60,1'], $route->gatherMiddleware());
+        $this->assertSame(['web', 'throttle:60,1'], $route->gatherMiddleware());
         $this->assertNull(LocalizedRoute::of(null));
     }
 
-    /** @return iterable<string, array{Closure(Locales): mixed}> */
+    /** @return iterable<string, array{Closure(): mixed}> */
     public static function misplacements(): iterable
     {
-        yield 'inside a prefix group' => [static fn (Locales $locales) => Route::prefix('app')->group(
-            static fn () => Route::localized($locales, static fn () => null),
+        yield 'inside a prefix group' => [static fn () => Route::prefix('app')->group(
+            static fn () => Route::localized(static fn () => null),
         )];
-        yield 'inside another Route::localized()' => [static fn (Locales $locales) => Route::localized(
-            $locales,
-            static fn () => Route::localized($locales, static fn () => null),
+        yield 'inside another Route::localized()' => [static fn () => Route::localized(
+            static fn () => Route::localized(static fn () => null),
         )];
     }
 
     #[DataProvider('misplacements')]
     public function test_it_throws_where_the_locale_would_not_be_the_first_path_segment(Closure $register): void
     {
+        config(['seo.locales' => ['en' => 'en', 'fr' => 'fr']]);
+
         $this->expectException(LogicException::class);
         $this->expectExceptionMessage('Route::localized() cannot sit inside a prefix group or another Route::localized()');
 
-        $register(new Locales(['en', 'fr'], 'en'));
+        $register();
     }
 
     /** @return iterable<string, array{Closure(): mixed}> */
@@ -94,10 +93,33 @@ final class LocalizedRoutesTest extends TestCase
     #[DataProvider('routeLevelPrefixes')]
     public function test_it_throws_when_a_route_level_prefix_pushes_the_locale_off_the_first_segment(Closure $routes): void
     {
+        config(['seo.locales' => ['en' => 'en', 'fr' => 'fr']]);
+
         $this->expectException(LogicException::class);
         $this->expectExceptionMessage('Route::localized(): [admin/fr/x] puts the locale after a route-level prefix');
 
-        Route::localized(new Locales(['en', 'fr'], 'en'), $routes);
+        Route::localized($routes);
+    }
+
+    public function test_a_v0_2_call_passing_locales_says_how_to_upgrade(): void
+    {
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage("Route::localized() takes only the routes closure since v0.3: set the languages in config('seo.locales') as code => name, default first.");
+
+        // @phpstan-ignore arguments.count (v0.2's call, on purpose)
+        Route::localized(new Locales(['en', 'fr'], 'en'), static fn () => null);
+    }
+
+    public function test_below_two_locales_the_routes_register_once_as_plain_routes(): void
+    {
+        config(['seo.locales' => ['en' => 'English']]);
+
+        Route::localized(static fn () => Route::get('only', static fn () => app()->getLocale())->name('only'));
+        Route::getRoutes()->refreshNameLookups();
+
+        $this->assertNull(LocalizedRoute::of(Route::getRoutes()->getByName('only')));
+        $this->assertFalse(Route::has('seo.fr.only'));
+        $this->get('/only')->assertOk()->assertContent('en');
     }
 
     public function test_a_path_that_is_not_the_copys_throws_instead_of_cutting_the_wrong_bytes(): void
@@ -108,10 +130,19 @@ final class LocalizedRoutesTest extends TestCase
         new LocalizedRoute(new Locales(['en', 'fr'], 'en'), 'fr')->path('/frx/terms', 'en');
     }
 
+    public function test_the_default_copy_never_gets_a_path_a_browser_reads_as_another_host(): void
+    {
+        $fr = new LocalizedRoute(new Locales(['en', 'fr', 'ar'], 'en'), 'fr');
+
+        $this->assertSame('/evil.test/x', $fr->path('/fr//evil.test/x', 'en'));
+        $this->assertSame('/', $fr->path('/fr//', 'en'));
+        $this->assertSame('/ar//evil.test/x', $fr->path('/fr//evil.test/x', 'ar'));
+    }
+
     public function test_a_default_route_opening_with_a_parameter_never_catches_another_codes_urls(): void
     {
         $this->withSite();
-        $this->withLocalizedRoutes(new Locales(['en', 'fr'], 'en'), static function (): void {
+        $this->withLocalizedRoutes(['en', 'fr'], static function (): void {
             Route::get('/', static fn () => 'home:' . app()->getLocale());
             Route::get('terms', static fn () => 'terms:' . app()->getLocale());
             Route::get('{page}', static fn (string $page) => "page:{$page}:" . app()->getLocale());
@@ -140,10 +171,10 @@ final class LocalizedRoutesTest extends TestCase
 
     public function test_bindings_resolve_under_the_urls_locale(): void
     {
-        // SubstituteBindings sits in `web`, ahead of SetLocale; the app's own locale middleware runs after it.
+        // The matched listener sets the locale before SubstituteBindings (in `web`) runs.
         $this->app->make(Kernel::class)->appendMiddlewareToGroup('web', NegotiateLocale::class);
         Route::bind('post', static fn (string $value): string => app()->getLocale() . ':' . $value);
-        $this->withLocalizedRoutes(new Locales(['en', 'fr'], 'en'), static function (): void {
+        $this->withLocalizedRoutes(['en', 'fr'], static function (): void {
             Route::get('posts/{post}', static fn (string $post): string => $post);
         });
 
@@ -155,8 +186,9 @@ final class LocalizedRoutesTest extends TestCase
     public function test_it_is_fine_inside_domain_name_and_middleware_groups(): void
     {
         $this->withSite();
+        config(['seo.locales' => ['en' => 'en', 'fr' => 'fr']]);
         Route::domain('localhost')->name('site.')->middleware('web')->group(static function (): void {
-            Route::localized(new Locales(['en', 'fr'], 'en'), static function (): void {
+            Route::localized(static function (): void {
                 Route::get('terms', static fn () => app()->getLocale())->name('terms');
             });
         });
@@ -168,30 +200,9 @@ final class LocalizedRoutesTest extends TestCase
         $this->get('http://go.test/fr/terms')->assertNotFound();
     }
 
-    public function test_the_url_names_the_locale_whatever_the_session_or_accept_language_say(): void
-    {
-        Event::fake([LocaleUpdated::class]);
-        // The app's own locale middleware sits in `web`; SetLocale is gathered after the group, so it has the last word.
-        $this->app->make(Kernel::class)->appendMiddlewareToGroup('web', NegotiateLocale::class);
-        $this->withLocalizedRoutes(new Locales(['en', 'fr', 'ar', 'es'], 'en'), static function (): void {
-            Route::get('terms', static fn () => app()->getLocale());
-        });
-
-        foreach (['/fr/terms' => 'fr', '/terms' => 'en'] as $url => $locale) {
-            $this->withSession(['locale' => 'es'])
-                ->get($url, ['Accept-Language' => 'ar'])
-                ->assertOk()
-                ->assertContent($locale);
-
-            Event::assertDispatched(LocaleUpdated::class, static fn (LocaleUpdated $event): bool => $event->locale === $locale);
-        }
-
-        Event::assertDispatched(LocaleUpdated::class, static fn (LocaleUpdated $event): bool => $event->locale === 'es');
-    }
-
     public function test_a_copy_receives_its_route_parameters_and_no_locale(): void
     {
-        $this->withLocalizedRoutes(new Locales(['en', 'fr'], 'en'), static function (): void {
+        $this->withLocalizedRoutes(['en', 'fr'], static function (): void {
             Route::get('posts/{slug}', static fn (string $slug): string => json_encode(func_get_args(), JSON_THROW_ON_ERROR));
         });
 
@@ -201,7 +212,7 @@ final class LocalizedRoutesTest extends TestCase
 
     public function test_route_urls_follow_the_current_locale(): void
     {
-        $this->withLocalizedRoutes(new Locales(['en', 'fr', 'ar'], 'en'), static function (): void {
+        $this->withLocalizedRoutes(['en', 'fr', 'ar'], static function (): void {
             Route::get('/', static fn () => '')->name('home');
             Route::get('terms', static fn () => '')->name('terms');
         });
@@ -233,10 +244,58 @@ final class LocalizedRoutesTest extends TestCase
         $this->assertSame('http://localhost', route('seo.fr.home'));
     }
 
+    public function test_every_copy_answers_to_the_routes_own_name(): void
+    {
+        config(['seo.locales' => ['en' => 'en', 'fr' => 'fr']]);
+        $answers = static fn (): array => [Route::currentRouteName(), Route::is('terms', 'site.about'), request()->routeIs('terms', 'site.about')];
+        Route::name('site.')->middleware('web')->group(static fn () => Route::localized(static function () use ($answers): void {
+            Route::get('about', $answers)->name('about');
+            Route::get('contact', $answers);
+        }));
+        $this->withLocalizedRoutes(['en', 'fr'], static function () use ($answers): void {
+            Route::get('terms', $answers)->name('terms');
+            Route::get('unnamed', $answers);
+        });
+
+        foreach ([
+            '/terms'      => ['terms', true, true],
+            '/fr/terms'   => ['terms', true, true],
+            '/about'      => ['site.about', true, true],
+            '/fr/about'   => ['site.about', true, true],
+            '/contact'    => ['site.', false, false],
+            '/fr/contact' => ['site.', false, false],
+            '/unnamed'    => [null, false, false],
+            '/fr/unnamed' => [null, false, false],
+        ] as $url => $answer) {
+            // Twice: the uncached collection hands back the same Route, already renamed.
+            $this->get($url)->assertOk()->assertExactJson($answer);
+            $this->get($url)->assertOk()->assertExactJson($answer);
+        }
+
+        foreach (['en' => 'http://localhost', 'fr' => 'http://localhost/fr'] as $locale => $base) {
+            $this->app->setLocale($locale);
+
+            foreach (['terms' => '/terms', 'seo.fr.terms' => '/terms', 'site.about' => '/about', 'site.seo.fr.about' => '/about'] as $name => $path) {
+                $this->assertSame($base . $path, route($name));
+            }
+        }
+    }
+
+    public function test_a_route_matched_listener_an_earlier_provider_set_sees_the_routes_own_name(): void
+    {
+        $this->withLocalizedRoutes(['en', 'fr'], static function (): void {
+            Route::get('terms', static fn () => '')->name('terms');
+        });
+
+        $this->get('/fr/terms')->assertOk();
+
+        $this->assertSame(['terms'], EarlierListenerProvider::$names);
+    }
+
     public function test_action_urls_follow_the_current_locale_whichever_copy_the_lookup_keeps(): void
     {
         // The action lookup keeps the last copy (the default) on Laravel 12, the first on 13.
-        $this->withLocalizedRoutes(new Locales(['fr', 'en', 'ar'], 'en'), static function (): void {
+        $this->withLocalizedRoutes(['en', 'fr', 'ar'], static function (): void {
             Route::get('terms', [LocalizedController::class, 'terms'])->name('terms');
         });
 
@@ -248,7 +307,7 @@ final class LocalizedRoutesTest extends TestCase
 
     public function test_a_formatter_an_earlier_provider_set_still_applies_after_the_packages(): void
     {
-        $this->withLocalizedRoutes(new Locales(['en', 'fr'], 'en'), static function (): void {
+        $this->withLocalizedRoutes(['en', 'fr'], static function (): void {
             Route::get('legacy', static fn () => '')->name('legacy');
         });
 
@@ -263,16 +322,25 @@ final class LocalizedRoutesTest extends TestCase
             <?php
 
             use Illuminate\Support\Facades\Route;
-            use Seo\Locales;
             use Seo\Tests\Fixtures\LocalizedController;
 
+            // route:cache runs in a subprocess with a fresh config: the codes are set here.
+            config(['seo.locales' => ['en' => 'en', 'fr' => 'fr', 'ar' => 'ar']]);
+
+            // First: the default {category}/{post} below would catch /fr/about.
+            Route::middleware('web')->name('site.')->group(static function (): void {
+                Route::localized(static function (): void {
+                    Route::get('about', static fn () => Route::currentRouteName())->name('about');
+                });
+            });
+
             Route::middleware('web')->group(static function (): void {
-                Route::localized(new Locales(['fr', 'en', 'ar'], 'en'), static function (): void {
+                Route::localized(static function (): void {
                     Route::get('terms', [LocalizedController::class, 'terms'])->name('terms');
                     // A default route opening with a parameter must not catch /ar/terms under the compiled matcher either.
                     Route::get('{category}/{post}', static fn () => 'post');
                     // Two unnamed routes: each copy names both after its group, and route:cache must not call that a clash.
-                    Route::get('one', static fn () => 'one');
+                    Route::get('one', static fn () => Route::currentRouteName());
                     Route::get('two', static fn () => 'two');
                 });
             });
@@ -280,19 +348,36 @@ final class LocalizedRoutesTest extends TestCase
 
         $this->assertTrue($this->app->routesAreCached());
         $this->assertEquals(
-            new LocalizedRoute(new Locales(['fr', 'en', 'ar'], 'en'), 'ar'),
+            new LocalizedRoute(new Locales(['en', 'fr', 'ar'], 'en'), 'ar'),
             LocalizedRoute::of(Route::getRoutes()->getByName('seo.ar.terms')),
         );
 
         $this->get('/ar/two')->assertOk()->assertContent('two');
+        $this->get('/fr/about')->assertOk()->assertContent('site.about');
+
+        // route:cache names every unnamed route: the copy's generated name drops seo.ar. as the default's never had it.
+        foreach (['/one', '/ar/one'] as $path) {
+            $this->assertStringStartsWith('generated::', (string)$this->get($path)->assertOk()->getContent());
+        }
 
         foreach (['/terms' => 'en', '/fr/terms' => 'fr', '/ar/terms' => 'ar'] as $path => $locale) {
-            $this->get($path)->assertOk()->assertExactJson([
-                'locale' => $locale,
-                'route'  => "http://localhost{$path}",
-                'action' => "http://localhost{$path}",
-            ]);
+            $json = [
+                'locale'  => $locale,
+                'route'   => "http://localhost{$path}",
+                'action'  => "http://localhost{$path}",
+                'name'    => 'terms',
+                'is'      => true,
+                'routeIs' => true,
+            ];
+            // Twice: the compiled collection keeps the Route it built per name, already renamed.
+            $this->get($path)->assertOk()->assertExactJson($json);
+            $this->get($path)->assertOk()->assertExactJson($json);
         }
+
+        $this->assertSame('http://localhost/ar/terms', route('seo.fr.terms'));
+        $this->app->setLocale('en');
+        $this->assertSame('http://localhost/terms', route('terms'));
+        $this->assertSame('http://localhost/terms', route('seo.ar.terms'));
     }
 
     /** @return array<string, string|null> uri => name, in registration order */

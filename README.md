@@ -51,6 +51,9 @@ off. A malformed `url` or `disallow` entry throws. To change the markup, run
 | `sitemap` | `[]` | Route names, paths or URLs to list. See [Sitemaps](#sitemaps). |
 | `index_now_key` | `INDEXNOW_KEY` | See [IndexNow](#indexnow). |
 | `routes` | `true` | Serve `/robots.txt`, `/sitemap.xml`, `/sitemap-{n}.xml` and `/indexnow-key.txt`. `false`: you serve them, and `seo:indexnow` needs your key route named `seo.indexnow`. |
+| `locales` | `[]` | Languages, `code => name` in that language; the first is the default. See [Languages](#languages). |
+| `user_locale` | `null` | The signed-in user's attribute holding their language. `null`: the session only. |
+| `entry_redirect` | `[]` | Route names whose default copy sends a visitor arriving from outside to their language. |
 
 ## Pages
 
@@ -145,26 +148,75 @@ Sitemap: https://example.com/sitemap.xml
 ## Languages
 
 ```php
-Route::localized(new \Seo\Locales(['en', 'fr', 'es'], default: 'en'), function () {
+// config/seo.php
+'locales' => ['en' => 'English', 'fr' => 'Français', 'es' => 'Español'], // the first is the default
+'user_locale' => 'locale',    // the users' column; null keeps the choice in the session only
+'entry_redirect' => ['home'], // these pages send a visitor arriving from outside to their language
+
+// routes/web.php
+Route::localized(function () {
     Route::get('/', HomeController::class)->name('home');
     Route::get('terms', [PageController::class, 'terms'])->name('terms');
 });
 ```
 
-`/terms` is English and `/fr/terms` French. The URL alone sets the app locale, `route('terms')` follows
-it, every copy emits the same hreflang set with x-default, and a sitemap entry expands to every locale's URL.
+`/terms` is English and `/fr/terms` French. A copy always renders its URL's language. `route('terms')` follows the
+current language, every copy emits the same hreflang set with x-default, and a sitemap entry expands to every locale's
+URL.
 
-- Call it outside any prefix group, before catch-all and fallback routes. Inside, prefix with
+Every other page renders the visitor's choice. That is their account's `user_locale`, else the session, else the
+language of the first `/fr/…` page of their visit, else the browser's, else the default. Visiting a page never
+changes it; the switcher does:
+
+```blade
+@inject('seo', \Seo\Seo::class)
+<form method="POST" action="{{ route('seo.locale') }}">
+    @csrf
+    <input type="hidden" name="to" value="{{ request()->getRequestUri() }}">
+    @foreach ($seo->languages() as $language)
+        <button name="locale" value="{{ $language->code }}" lang="{{ $language->code }}" @if ($language->current) aria-current="true" @endif>{{ $language->name }}</button>
+    @endforeach
+</form>
+```
+
+It saves the choice, to the account too, and returns the visitor to the same page in that language. A signed page
+is signed again only while its own signature is still valid under the current key, and only when the re-signed URL
+is that page's copy in the chosen language on the same host; otherwise the visitor returns to the page unchanged.
+
+- Call `Route::localized()` outside any prefix group, before catch-all and fallback routes. Inside, prefix with
   `Route::prefix()->group()`, never a route-level `->prefix()`.
 - Put in only pages whose content is translated, plus their forms' POST routes.
-- Pass the default from code, never `config('app.locale')`.
 - Link with `route()`: `url()` and hard-coded paths go to the default copy.
-- A language switcher, after `@inject('seo', \Seo\Seo::class)`, links each code but `x-default` to its URL in
-  `$seo->site(request())->alternates(request(), $seo->pageFor(request()))`, `[]` outside `Route::localized()`.
+- On `/fr/terms`, `Route::currentRouteName()`, `Route::is()` and `routeIs()` see `terms`. `route:list` still shows
+  `seo.fr.terms`.
+- An account without a language takes the page's when it signs up or signs in, so `/fr/register` saves `fr`. Keep
+  `HasLocalePreference` on the User so mail goes out in that language; its links carry the language's prefix.
+- An existing account with an empty `user_locale` gets the visitor's choice on its next visit, as a normal model save
+  (model events fire).
+- `POST /locale` is registered before your routes. On Laravel 13, a catch-all inside `Route::domain()` that accepts
+  POST would take it.
+- A CDN must not cache the HTML of `entry_redirect` pages: they vary per visitor. Crawlers are never redirected.
+- A 404 for a URL no route matches renders in the default language unless you have a `Route::fallback()`.
+- Livewire: add `\Seo\Http\ResolveLocale::class` to `Livewire::addPersistentMiddleware()`. Otherwise a component
+  update renders in the saved language, not the page's.
 - To 301 old query-parameter URLs (`/terms?lang=fr` to `/fr/terms`), redirect to
-  `\Seo\LocalizedRoute::of($request->route())?->path($request->getPathInfo(), $code)`, with `$code` checked
-  against your codes first: `?lang=/evil.test` would otherwise redirect off-site.
+  `\Seo\LocalizedRoute::of($request->route())?->path($request->getPathInfo(), $code)`. Check `$code` against your
+  codes first: `?lang=/evil.test` would otherwise redirect off-site.
 - Your layout renders `<html lang>` from `app()->getLocale()`.
+- `seo:check` reports an `entry_redirect` name that is not a localized route, and a `user_locale` the users table
+  lacks.
+- Remove any locale middleware of your own: it runs after the package's and would override a copy's language.
+  `assertHreflangReciprocal()` catches a copy that renders another language.
+
+## Upgrading from 0.2
+
+- Move the codes into `seo.locales` as `code => name`, default first, and drop the `Locales` argument:
+  `Route::localized(function () { … })`.
+- `Seo\Http\SetLocale` is gone. Remove any locale middleware of your own: it would override a copy's language.
+- A localized copy answers to the route's own name: `terms` on `/fr/terms`, no longer `seo.fr.terms`.
+- New dependency: `jaybizzle/crawler-detect`.
+- Set `seo.locales` first: with fewer than two, `Route::localized()` registers plain routes, so every `/fr/…` URL
+  would 404.
 
 ## IndexNow
 
@@ -211,6 +263,8 @@ docker compose exec -u sail -e APP_URL=https://example.com laravel.test php arti
 
 | Row | Checks |
 |---|---|
+| `entry_redirect` | Each name is a `Route::localized()` route. |
+| `user_locale` | The users table has the column. An unreachable database WARNs. |
 | `robots.txt` | 200 `text/plain`, byte-identical to the app's body. A FAIL names the first differing line. |
 | `sitemap` | XML whose URLs are all on the host and allowed by robots.txt. |
 | `sample`, `descriptions` | `--sample` sitemap URLs (default 5) are 200, self-canonical and indexable, with no second `<title>`. One without a description WARNs. |
@@ -246,5 +300,5 @@ the head through `<x-seo::head :title="$title ?? null" />`. Inertia gets the ser
 - `og:locale` and `twitter:*` tags beyond `twitter:card`: no search effect, and X falls back to Open Graph.
 - Bing's `msvalidate.01` (verify Bing by importing the site from Search Console) and subdirectory installs:
   `url` must be a bare origin.
-- Typed schema.org helpers (pass `jsonLd` nodes), www and alias-host redirects, redirects by language,
-  translated slugs and a queued IndexNow job.
+- Typed schema.org helpers (pass `jsonLd` nodes), www and alias-host redirects, translated slugs and a queued
+  IndexNow job.

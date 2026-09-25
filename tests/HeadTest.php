@@ -687,7 +687,7 @@ final class HeadTest extends TestCase
     public function test_the_hreflang_block_renders_in_emission_order(): void
     {
         $this->withSite(['name' => 'cuty.io', 'title_separator' => ' | ', 'image' => '/og.png']);
-        $this->withLocales(['en', 'fr'], 'en');
+        $this->withLocales(['en', 'fr']);
 
         $this->visit('/fr/faq', new Page(title: "Conditions d'utilisation", description: 'Desc.'))->assertSeeInOrder([
             '<html lang="fr">',
@@ -711,7 +711,7 @@ final class HeadTest extends TestCase
 
     public function test_the_site_is_rebuilt_when_the_locale_changes_within_a_request(): void
     {
-        // A siteUsing() closure may read the locale, and a Site built before SetLocale ran must not leak it.
+        // A siteUsing() closure may read the locale, and a Site built before the match sets it must not leak it.
         $this->seo()->siteUsing(static fn (Application $app): array => ['name' => $app->getLocale() === 'fr' ? 'Accueil' : 'Home']);
         $request = Request::create('/fr');
         $site = $this->seo()->site($request);

@@ -7,11 +7,18 @@ namespace Seo\Console;
 use GuzzleHttp\Exception\TransferException;
 use GuzzleHttp\Psr7\Exception\MalformedUriException;
 use Illuminate\Console\Command;
+use Illuminate\Contracts\Config\Repository;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
+use Illuminate\Routing\Router;
+use Illuminate\Support\Facades\Schema;
 use Seo\HostRole;
+use Seo\Locales;
+use Seo\LocalizedRoute;
 use Seo\ParsedPage;
 use Seo\Seo;
 use Seo\Site;
@@ -86,6 +93,7 @@ final class CheckCommand extends Command
 
         $this->write("seo:check · site {$site->url} · crawler rows spoof user agents from this machine's IP and are indicative only");
         $this->write();
+        $this->languages();
 
         $sitemapUrl = $seo->sitemapUrl($site);
 
@@ -126,6 +134,55 @@ final class CheckCommand extends Command
         $this->write(sprintf('%d FAIL, %d WARN, %d SKIP · exit %d', $this->counts['FAIL'], $this->counts['WARN'], $this->counts['SKIP'], $exit));
 
         return $exit;
+    }
+
+    /** Language config only a booted app can check: routes load after every provider's boot, even with route:cache. */
+    private function languages(): void
+    {
+        if (Locales::configured() === null) {
+            return;
+        }
+
+        $config = $this->laravel->make('config');
+        $routes = $this->laravel->make(Router::class)->getRoutes();
+        $this->write('languages');
+
+        foreach ((array)$config->get('seo.entry_redirect') as $name) {
+            $name = is_scalar($name) ? (string)$name : get_debug_type($name);
+            $localized = LocalizedRoute::of($routes->getByName($name));
+            $isDefaultCopy = $localized !== null && $localized->locale === $localized->locales->default;
+            $this->row('entry_redirect', $isDefaultCopy ? 'PASS' : 'FAIL', $isDefaultCopy ? $name : "[{$name}] is not the name of a Route::localized() route");
+        }
+
+        $column = $config->get('seo.user_locale');
+
+        if (is_string($column) && $column !== '') {
+            $this->row('user_locale', ...self::userColumn($config, $column));
+        }
+
+        $this->write();
+    }
+
+    /** @return array{string, string} status, detail */
+    private static function userColumn(Repository $config, string $column): array
+    {
+        $provider = $config->get('auth.guards.' . $config->get('auth.defaults.guard') . '.provider');
+        $model = is_string($provider) ? $config->get("auth.providers.{$provider}.model") : null;
+
+        if (! is_string($model) || ! is_a($model, Model::class, true)) {
+            return ['WARN', "no Eloquent user model to check [{$column}] on"];
+        }
+
+        $user = new $model;
+        $table = $user->getTable();
+
+        try {
+            $exists = Schema::connection($user->getConnectionName())->hasColumn($table, $column);
+        } catch (QueryException) {
+            return ['WARN', "could not reach the database to check {$table}.{$column}"];
+        }
+
+        return $exists ? ['PASS', "{$table}.{$column}"] : ['FAIL', "{$table} has no column [{$column}]"];
     }
 
     private function robotsTxt(string $host, string $expected): void

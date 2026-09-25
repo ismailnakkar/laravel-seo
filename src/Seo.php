@@ -96,8 +96,31 @@ class Seo
     }
 
     /**
-     * Memoised per Request and locale when a Request is given (a siteUsing() closure may read the locale, and SetLocale
-     * runs after the first build); rebuilt on every call without one.
+     * The configured languages in config order, for a switcher. [] below two.
+     *
+     * @return list<Language>
+     */
+    public function languages(): array
+    {
+        $locales = Locales::configured();
+
+        if ($locales === null) {
+            return [];
+        }
+
+        /** @var Application $app */
+        $app = Container::getInstance();
+        $names = (array)$app->make('config')->get('seo.locales');
+
+        return array_map(
+            static fn (string $code): Language => new Language($code, (string)$names[$code], $code === $app->getLocale()),
+            $locales->codes,
+        );
+    }
+
+    /**
+     * Memoised per Request and locale when a Request is given (a siteUsing() closure may read the locale, and the
+     * locale can change after the first build within a request); rebuilt on every call without one.
      *
      * @throws InvalidArgumentException for a malformed code-sourced value: url, a disallow entry
      */

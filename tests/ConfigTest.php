@@ -5,9 +5,14 @@ declare(strict_types=1);
 namespace Seo\Tests;
 
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Foundation\Http\Kernel as HttpKernel;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Seo\Http\ResolveLocale;
+use Seo\Locales;
 use Seo\Page;
 use Seo\ParsedPage;
 use Seo\SeoServiceProvider;
@@ -155,5 +160,46 @@ final class ConfigTest extends TestCase
         $site = $this->seo()->site();
 
         $this->assertSame(['From config', null], [$site->name, $site->image]);
+    }
+
+    /** @return iterable<string, array{mixed}> */
+    public static function malformedLocales(): iterable
+    {
+        yield 'a list without names' => [['en', 'fr']];
+        yield 'an empty name' => [['en' => 'English', 'fr' => ' ']];
+        yield 'a malformed code' => [['en' => 'English', 'EN_us' => 'US']];
+    }
+
+    #[DataProvider('malformedLocales')]
+    public function test_malformed_locales_throw(mixed $locales): void
+    {
+        config(['seo.locales' => $locales]);
+
+        $this->expectException(InvalidArgumentException::class);
+
+        Locales::configured();
+    }
+
+    public function test_the_first_of_two_or_more_locales_is_the_default_and_one_is_none(): void
+    {
+        config(['seo.locales' => ['fr' => 'Français', 'en' => 'English']]);
+        $this->assertEquals(new Locales(['fr', 'en'], 'fr'), Locales::configured());
+
+        config(['seo.locales' => ['en' => 'English']]);
+        $this->assertNull(Locales::configured());
+    }
+
+    public function test_one_language_registers_no_middleware_and_no_switch_route(): void
+    {
+        $kernel = $this->app->make(Kernel::class);
+        assert($kernel instanceof HttpKernel);
+
+        $this->assertNotContains(ResolveLocale::class, $kernel->getMiddlewareGroups()['web']);
+        $this->assertFalse(Route::has('seo.locale'));
+    }
+
+    public function test_one_language_lists_none(): void
+    {
+        $this->assertSame([], $this->seo()->languages());
     }
 }

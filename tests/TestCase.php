@@ -6,11 +6,13 @@ namespace Seo\Tests;
 
 use Closure;
 use Illuminate\Contracts\View\View;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Http\Middleware\PreventRequestsDuringMaintenance;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\PendingCommand;
 use Illuminate\Testing\TestResponse;
 use Orchestra\Testbench\TestCase as BaseTestCase;
@@ -56,6 +58,7 @@ abstract class TestCase extends BaseTestCase
         $app['config']->set('app.url', self::URL);
         $app['config']->set('app.key', 'base64:' . base64_encode(str_repeat('k', 32))); // the web group encrypts cookies
         $app['config']->set('view.paths', [__DIR__ . '/Fixtures/views']);
+        $app['config']->set('database.default', 'testing');
     }
 
     /** For #[DefineEnvironment]: runs before the providers boot. */
@@ -156,26 +159,37 @@ abstract class TestCase extends BaseTestCase
     /**
      * The fixture pages inside Route::localized(), replacing the unlocalized routes on the same URIs.
      *
-     * @param  list<string>  $codes
+     * @param  list<string>  $codes  the first is the default
      */
-    protected function withLocales(array $codes = ['en', 'fr', 'ar', 'es'], string $default = 'en'): Locales
+    protected function withLocales(array $codes = ['en', 'fr', 'ar', 'es']): Locales
     {
-        $locales = new Locales($codes, $default);
-
-        $this->withLocalizedRoutes($locales, function (Router $router): void {
+        $this->withLocalizedRoutes($codes, function (Router $router): void {
             foreach (static::PAGES as $path) {
                 $router->get($path, $this->renderFixturePage(...));
             }
         });
 
-        return $locales;
+        return new Locales($codes, $codes[0]);
     }
 
-    protected function withLocalizedRoutes(Locales $locales, Closure $routes): void
+    /** @param list<string> $codes the first is the default; each is its own name, as no test renders them */
+    protected function withLocalizedRoutes(array $codes, Closure $routes): void
     {
+        config(['seo.locales' => array_combine($codes, $codes)]);
         $router = $this->app->make(Router::class);
-        $router->middleware('web')->group(static fn (Router $router) => $router->localized($locales, $routes));
+        $router->middleware('web')->group(static fn (Router $router) => $router->localized($routes));
         $router->getRoutes()->refreshNameLookups();
         $router->getRoutes()->refreshActionLookups();
+    }
+
+    /** The fixture User's table. */
+    protected function createUsersTable(): void
+    {
+        Schema::create('users', static function (Blueprint $table): void {
+            $table->id();
+            $table->string('name')->default('');
+            $table->string('locale', 20)->nullable();
+            $table->timestamps();
+        });
     }
 }

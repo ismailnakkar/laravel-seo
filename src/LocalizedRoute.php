@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Seo;
 
 use Illuminate\Routing\Route;
+use Illuminate\Support\Str;
 use LogicException;
 
 /** What Route::localized() stamped on a route: its group's locales and the locale this copy serves. */
@@ -46,6 +47,34 @@ final readonly class LocalizedRoute
             $base = $rest ?: '/';
         }
 
-        return $code === $this->locales->default ? $base : '/' . $code . rtrim($base, '/');
+        // One leading slash: a catch-all's `/fr//host` would otherwise leave `//host`, which a browser reads as a host.
+        return $code === $this->locales->default ? '/' . ltrim($base, '/') : '/' . $code . rtrim($base, '/');
+    }
+
+    /**
+     * $route's own name, as its default copy has it: `seo.{locale}.` stripped on a non-default copy, never touched
+     * on the default (the package never prefixes it). null once that leaves nothing: an unnamed route.
+     */
+    public function name(Route $route): ?string
+    {
+        $name = (string)$route->getName();
+
+        if ($this->locale !== $this->locales->default) {
+            $name = Str::replaceFirst("seo.{$this->locale}.", '', $name);
+        }
+
+        return $name === '' ? null : $name;
+    }
+
+    /** $route's URI with this copy's own locale segment gone, trimmed of '/': the shape every copy shares. */
+    public function unprefixedUri(Route $route): string
+    {
+        $uri = trim($route->uri(), '/');
+
+        if ($this->locale === $this->locales->default) {
+            return $uri;
+        }
+
+        return $uri === $this->locale ? '' : Str::after($uri, "{$this->locale}/");
     }
 }

@@ -100,7 +100,7 @@ final class HreflangTest extends TestCase
     {
         // Google documents zh-Hans and zh-Hant: script subtags, optionally with a region.
         $this->withSite();
-        $this->withLocales(['en-GB', 'zh-Hant', 'zh-Hant-TW'], 'en-GB');
+        $this->withLocales(['en-GB', 'zh-Hant', 'zh-Hant-TW']);
 
         $this->assertSame([
             'en-GB'      => 'http://localhost/faq',
