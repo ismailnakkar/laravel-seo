@@ -1,0 +1,16 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 6
+    paths:
+        - src
+        - tests
+    # Constructors re-check config values against the types their PHPDoc promises.
+    treatPhpDocTypesAsCertain: false
+    ignoreErrors:
+        # TestCase adds tests/Fixtures/views at runtime; Larastan checks view names against the bare skeleton.
+        -
+            identifier: argument.type
+            message: '#view-string#'
+            path: tests/*

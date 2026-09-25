@@ -1,0 +1,66 @@
+{
+    "name": "ismailnakkar/laravel-seo",
+    "description": "Head tags, robots.txt, sitemaps and IndexNow for Laravel, with crawlability test helpers and a live check.",
+    "keywords": [
+        "laravel",
+        "seo",
+        "robots",
+        "sitemap",
+        "indexnow"
+    ],
+    "homepage": "https://github.com/ismailnakkar/laravel-seo",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Ismail Nakkar",
+            "email": "juge.steam@gmail.com"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/ismailnakkar/laravel-seo/issues"
+    },
+    "require": {
+        "php": "^8.4",
+        "ext-dom": "*",
+        "guzzlehttp/psr7": "^2.9 || ^3.0",
+        "laravel/framework": "^12.61.1 || ^13.12",
+        "symfony/polyfill-intl-idn": "^1.18"
+    },
+    "require-dev": {
+        "fakerphp/faker": "^1.24",
+        "larastan/larastan": "^3.12",
+        "laravel/pint": "^1.19",
+        "orchestra/testbench": "^10.0 || ^11.0",
+        "phpunit/phpunit": "^11.5 || ^12.0 || ^13.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Seo\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Seo\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/phpunit",
+        "lint": "vendor/bin/pint",
+        "analyse": "vendor/bin/phpstan analyse --memory-limit=1G",
+        "check": [
+            "vendor/bin/pint --test",
+            "@analyse",
+            "vendor/bin/phpunit"
+        ]
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Seo\\SeoServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

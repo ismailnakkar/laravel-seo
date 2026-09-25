@@ -1,0 +1,3 @@
+# For vendor/bin/testbench (route:cache in LocalizedRoutesTest): its cached package manifest can miss this package.
+providers:
+  - Seo\SeoServiceProvider
