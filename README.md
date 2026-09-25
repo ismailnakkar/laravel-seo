@@ -14,10 +14,10 @@ composer require ismailnakkar/laravel-seo
 php artisan seo:install
 ```
 
-`seo:install` publishes `config/seo.php` and deletes `public/robots.txt`, `public/sitemap.xml` and
-`public/indexnow-key.txt`, which the web server would serve instead. It asks first, except for Laravel's stock
-robots.txt. Commit the deletion, and delete your own robots.txt and sitemap routes, which replace the
-package's. `APP_URL`, or `url` in the config, must be the public origin, such as `https://example.com`.
+`seo:install` publishes `config/seo.php` and deletes `public/robots.txt`, `public/sitemap.xml` and `public/indexnow-key.txt`,
+which the web server would serve instead (it asks first, except for Laravel's stock robots.txt). Commit the deletion, and
+delete your own robots.txt and sitemap routes. An nginx `location = /robots.txt` block needs `try_files $uri
+/index.php?$query_string;`, or Laravel's body goes out with a 404. `APP_URL`, or `url`, must be the public origin.
 
 Render the head at the top of `<head>`, after charset and viewport, and delete the layout's own `<title>`,
 description, robots, canonical and Open Graph tags:
