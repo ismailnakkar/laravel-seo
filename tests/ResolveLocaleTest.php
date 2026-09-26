@@ -5,21 +5,33 @@ declare(strict_types=1);
 namespace Seo\Tests;
 
 use Illuminate\Auth\GenericUser;
+use Illuminate\Auth\Middleware\Authenticate;
+use Illuminate\Auth\SessionGuard;
+use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Contracts\Session\Middleware\AuthenticatesSessions;
+use Illuminate\Cookie\Middleware\EncryptCookies;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Foundation\Http\Kernel as HttpKernel;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Routing\Router;
+use Illuminate\Session\Middleware\AuthenticateSession;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Exceptions;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
+use Orchestra\Testbench\Attributes\DefineEnvironment;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
+use Seo\Http\ApplyLocale;
 use Seo\Http\ResolveLocale;
+use Seo\Tests\Fixtures\Admin;
 use Seo\Tests\Fixtures\LocaleCode;
 use Seo\Tests\Fixtures\User;
 
@@ -32,17 +44,25 @@ final class ResolveLocaleTest extends LanguagesTestCase
         $router->localized(static function (Router $router) use ($locale): void {
             $router->match(['GET', 'HEAD', 'POST', 'QUERY'], '/', $locale)->name('home');
             $router->get('terms', $locale)->name('terms');
+            $router->get('login', $locale)->name('login');
             $router->post('sign-up', static function (): string {
                 Auth::login(User::create(['name' => 'new']));
 
                 return app()->getLocale();
             });
+            $router->post('sign-in', static function (): string {
+                Auth::login(User::query()->where('name', 'member')->firstOrFail());
+
+                return app()->getLocale();
+            });
         });
         $router->get('plain', $locale);
+        $router->get('members', $locale)->middleware('auth')->name('members');
+        $router->get('admin', $locale)->middleware('auth:admin');
         $router->get('limited', $locale)->middleware('throttle:1,1');
         // Like cuty's login-as: the admin's session, the member for the rest of the request. Route::middleware()
         // only accepts middleware names, never a raw Closure (it casts every entry to string), so the swap happens
-        // in the route's own action instead; ResolveLocale, in the `web` group, has already run by then either way.
+        // in the route's own action instead; ApplyLocale, in the `web` group, has already run by then either way.
         $router->get('as/{member}', static function (Request $request) use ($locale): string {
             Auth::onceUsingId((int)$request->route('member'));
 
@@ -53,16 +73,82 @@ final class ResolveLocaleTest extends LanguagesTestCase
         $router->get('sessionless', $locale)->withoutMiddleware([StartSession::class, ShareErrorsFromSession::class, VerifyCsrfToken::class, PreventRequestForgery::class]);
     }
 
-    public function test_it_runs_in_web_straight_after_the_session(): void
+    public function test_the_choice_runs_straight_after_the_session_and_the_account_straight_after_authenticate_session(): void
     {
         $kernel = $this->app->make(Kernel::class);
         assert($kernel instanceof HttpKernel);
         $priority = $kernel->getMiddlewarePriority();
 
         $this->assertContains(ResolveLocale::class, $kernel->getMiddlewareGroups()['web']);
+        $this->assertContains(ApplyLocale::class, $kernel->getMiddlewareGroups()['web']);
         // Larastan can't see getMiddlewarePriority() as a list (Laravel's own @return is bare array), so array_search()
         // types as int|string|false; the +1 needs the int cast to satisfy it.
         $this->assertSame((int)array_search(StartSession::class, $priority, true) + 1, array_search(ResolveLocale::class, $priority, true));
+        $this->assertSame((int)array_search(AuthenticatesSessions::class, $priority, true) + 1, array_search(ApplyLocale::class, $priority, true));
+    }
+
+    /** An app's own priority list without AuthenticateSession, set before any package's hook as the builder's is. */
+    protected function priorityWithoutAuthenticateSession(Application $app): void
+    {
+        $app->afterResolving(Kernel::class, static function (HttpKernel $kernel): void {
+            // Not StartSession first: older Laravel ranks "after the first entry" at the end of the list.
+            $kernel->setMiddlewarePriority([EncryptCookies::class, StartSession::class, AuthenticatesRequests::class, SubstituteBindings::class]);
+            $kernel->appendMiddlewareToGroup('web', AuthenticateSession::class);
+        });
+    }
+
+    #[DefineEnvironment('priorityWithoutAuthenticateSession')]
+    public function test_a_priority_list_without_authenticate_session_still_puts_the_account_after_both_auth_checks(): void
+    {
+        $this->app->make(Kernel::class); // runs the app's hook, then the package's
+        $router = $this->app->make(Router::class);
+        $route = $router->getRoutes()->getByName('members');
+        assert($route !== null);
+
+        $order = array_values(array_intersect(
+            $router->gatherRouteMiddleware($route),
+            [ResolveLocale::class, Authenticate::class, AuthenticateSession::class, ApplyLocale::class],
+        ));
+
+        $this->assertCount(4, $order);
+        $this->assertSame(ResolveLocale::class, $order[0]);
+        $this->assertSame(ApplyLocale::class, $order[3]);
+    }
+
+    public function test_a_revoked_remember_me_cookie_is_not_signed_in_by_the_entry_redirect(): void
+    {
+        $this->withAuthenticateSession();
+        $member = User::create(['name' => 'member', 'locale' => 'fr', 'password' => 'hash-now', 'remember_token' => 'token']);
+
+        // Its third part is the password the cookie was issued under, changed since. Newer frameworks' guard refuses it
+        // itself; older ones sign it in and leave AuthenticateSession to throw it out.
+        $this->withCookie($this->recallerName(), "{$member->id}|token|hash-before")->get('/');
+
+        $this->assertGuestNextTime();
+    }
+
+    public function test_a_valid_remember_me_cookie_still_lands_on_the_accounts_language(): void
+    {
+        $this->withAuthenticateSession();
+        $member = User::create(['name' => 'member', 'locale' => 'fr', 'password' => 'hash-now', 'remember_token' => 'token']);
+
+        $this->withCookie($this->recallerName(), "{$member->id}|token|hash-now")->get('/')->assertRedirect('/fr');
+    }
+
+    public function test_the_choice_never_signs_in_a_remember_me_cookie_for_a_refusal_ahead_of_authenticate_session(): void
+    {
+        $member = User::create(['name' => 'member', 'locale' => 'fr', 'password' => 'hash-now', 'remember_token' => 'token']);
+        // Unit tests skip CSRF. offsetSet(), not `$this->app['env'] =`, which Larastan misreads.
+        $this->app->offsetSet('env', 'production');
+
+        $this->withCookie($this->recallerName(), "{$member->id}|token|hash-now")->post('/')->assertStatus(419);
+
+        $this->assertGuestNextTime();
+    }
+
+    public function test_a_guest_turned_away_by_auth_lands_on_the_login_page_in_their_language(): void
+    {
+        $this->withSession([ResolveLocale::SESSION_KEY => 'fr'])->get('/members')->assertRedirect('/fr/login');
     }
 
     public function test_a_copy_renders_its_own_language_and_visiting_it_never_changes_the_choice(): void
@@ -74,11 +160,13 @@ final class ResolveLocaleTest extends LanguagesTestCase
         $this->get('/plain')->assertContent('fr');
     }
 
-    public function test_the_account_beats_the_session(): void
+    public function test_the_account_beats_the_session_and_corrects_it(): void
     {
         $user = User::create(['name' => 'member', 'locale' => 'ar']);
 
         $this->actingAs($user)->withSession([ResolveLocale::SESSION_KEY => 'fr'])->get('/plain')->assertContent('ar');
+
+        $this->assertSame('ar', session(ResolveLocale::SESSION_KEY));
     }
 
     public function test_an_enum_cast_account_language_counts(): void
@@ -127,7 +215,7 @@ final class ResolveLocaleTest extends LanguagesTestCase
     {
         $user = User::create(['name' => 'member', 'locale' => 'ar']);
 
-        $this->actingAs($user)->withSession([ResolveLocale::SESSION_KEY => 'fr'])->get('/es/terms');
+        $this->actingAs($user)->withSession([ResolveLocale::SESSION_KEY => 'fr'])->get('/es/terms')->assertContent('es');
 
         $this->assertSame('ar', $user->fresh()?->locale);
     }
@@ -137,6 +225,15 @@ final class ResolveLocaleTest extends LanguagesTestCase
         $this->withSession([ResolveLocale::SESSION_KEY => 'es'])->post('/fr/sign-up')->assertContent('fr');
 
         $this->assertSame('fr', User::query()->where('name', 'new')->value('locale'));
+    }
+
+    public function test_signing_in_never_overwrites_the_accounts_language(): void
+    {
+        $member = User::create(['name' => 'member', 'locale' => 'ar']);
+
+        $this->withSession([ResolveLocale::SESSION_KEY => 'es'])->post('/fr/sign-in')->assertContent('fr');
+
+        $this->assertSame('ar', $member->fresh()?->locale);
     }
 
     public function test_an_admin_signed_in_as_a_member_never_writes_the_members_account(): void
@@ -175,6 +272,84 @@ final class ResolveLocaleTest extends LanguagesTestCase
         Exceptions::assertReported(static fn (RuntimeException $e): bool => $e->getMessage() === 'database down');
     }
 
+    public function test_a_fill_goes_through_the_saving_closure_with_the_requests_user(): void
+    {
+        $user = User::create(['name' => 'member']);
+        $calls = [];
+        $this->seo()->saveUserLocaleUsing(static function (User $model, string $code) use (&$calls): void {
+            $calls[] = [$model, $code];
+            User::query()->whereKey($model->getKey())->update(['locale' => $code]);
+        });
+
+        $this->actingAs($user)->withSession([ResolveLocale::SESSION_KEY => 'es'])->get('/plain')->assertContent('es');
+
+        $this->assertSame([[$user, 'es']], $calls);
+        $this->assertSame('es', $user->fresh()?->locale);
+        $this->assertSame('es', $user->locale);
+        $this->assertFalse($user->isDirty('locale'));
+    }
+
+    public function test_signing_up_saves_the_pages_language_through_the_closure(): void
+    {
+        $codes = [];
+        $this->seo()->saveUserLocaleUsing(static function (User $user, string $code) use (&$codes): void {
+            $codes[] = $code;
+        });
+
+        $this->post('/fr/sign-up')->assertContent('fr');
+
+        $this->assertSame(['fr'], $codes);
+    }
+
+    public function test_a_throwing_closure_in_a_fill_is_reported_and_the_page_still_served(): void
+    {
+        Exceptions::fake();
+        $this->seo()->saveUserLocaleUsing(static fn () => throw new RuntimeException('service down'));
+        $user = User::create(['name' => 'member']);
+
+        $this->actingAs($user)->withHeaders(['Accept-Language' => 'fr'])->get('/plain')->assertOk()->assertContent('fr');
+
+        Exceptions::assertReported(static fn (RuntimeException $e): bool => $e->getMessage() === 'service down');
+        $this->assertNull($user->locale);
+    }
+
+    /** @return iterable<string, array{bool, bool}> a member signed in too, Model::preventAccessingMissingAttributes() */
+    public static function adminPages(): iterable
+    {
+        yield 'an admin and a member' => [true, false];
+        yield 'an admin and a member, strict' => [true, true];
+        yield 'an admin' => [false, false];
+        yield 'an admin, strict' => [false, true];
+    }
+
+    #[DataProvider('adminPages')]
+    public function test_another_guards_model_without_the_column_is_left_alone(bool $member, bool $strict): void
+    {
+        $this->createAdminsTable();
+        config([
+            'auth.guards.admin'     => ['driver' => 'session', 'provider' => 'admins'],
+            'auth.providers.admins' => ['driver' => 'eloquent', 'model' => Admin::class],
+        ]);
+        Exceptions::fake();
+
+        if ($member) {
+            $this->actingAs(User::create(['name' => 'member', 'locale' => 'fr']));
+        }
+
+        $this->actingAs(Admin::create(), 'admin');
+        // actingAs() made the admin guard the default; on the page, auth:admin must.
+        Auth::shouldUse('web');
+        Model::preventAccessingMissingAttributes($strict);
+
+        try {
+            $this->withSession([ResolveLocale::SESSION_KEY => 'es'])->get('/admin')->assertOk()->assertContent('es');
+        } finally {
+            Model::preventAccessingMissingAttributes(false);
+        }
+
+        Exceptions::assertNothingReported();
+    }
+
     public function test_a_refusal_ahead_of_the_route_speaks_the_visitors_language(): void
     {
         $this->withSession([ResolveLocale::SESSION_KEY => 'fr'])->get('/limited')->assertOk();
@@ -183,6 +358,24 @@ final class ResolveLocaleTest extends LanguagesTestCase
         $this->get('/limited')->assertStatus(429);
 
         $this->assertSame('fr', $this->app->getLocale());
+    }
+
+    public function test_a_refusal_on_a_copy_speaks_the_copys_language(): void
+    {
+        $this->app->offsetSet('env', 'production');
+
+        $this->withSession([ResolveLocale::SESSION_KEY => 'es'])->post('/fr/sign-up')->assertStatus(419);
+
+        $this->assertSame('fr', $this->app->getLocale());
+    }
+
+    public function test_a_sessions_refused_first_request_still_keeps_the_choice(): void
+    {
+        $this->app->offsetSet('env', 'production');
+
+        $this->post('/es')->assertStatus(419);
+
+        $this->get('/plain')->assertContent('es');
     }
 
     public function test_a_route_without_a_session_still_resolves(): void
@@ -267,5 +460,31 @@ final class ResolveLocaleTest extends LanguagesTestCase
     public function test_a_prefixed_copy_is_never_redirected(): void
     {
         $this->withSession([ResolveLocale::SESSION_KEY => 'ar'])->get('/es')->assertOk()->assertContent('es');
+    }
+
+    private function withAuthenticateSession(): void
+    {
+        $kernel = $this->app->make(Kernel::class);
+        assert($kernel instanceof HttpKernel);
+        $kernel->appendMiddlewareToGroup('web', AuthenticateSession::class);
+    }
+
+    private function recallerName(): string
+    {
+        $guard = Auth::guard('web');
+        assert($guard instanceof SessionGuard);
+
+        return $guard->getRecallerName();
+    }
+
+    /** The next visit, without the cookie: only what the last one left in the session can sign it in. */
+    private function assertGuestNextTime(): void
+    {
+        $this->defaultCookies = [];
+        Auth::forgetGuards();
+
+        $this->get('/plain');
+
+        $this->assertGuest();
     }
 }

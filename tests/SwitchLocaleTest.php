@@ -70,6 +70,21 @@ final class SwitchLocaleTest extends LanguagesTestCase
         $this->get('/plain')->assertContent('fr');
     }
 
+    public function test_the_account_is_saved_through_the_closure(): void
+    {
+        $user = User::create(['name' => 'member', 'locale' => 'en']);
+        $calls = [];
+        $this->seo()->saveUserLocaleUsing(static function (User $model, string $code) use (&$calls): void {
+            $calls[] = [$model, $code];
+        });
+
+        $this->actingAs($user)->post('/locale', ['locale' => 'fr', 'to' => '/plain'])->assertStatus(303);
+
+        $this->assertSame([[$user, 'fr']], $calls);
+        $this->assertSame('en', $user->fresh()?->locale);
+        $this->assertSame('fr', $user->locale);
+    }
+
     /** @return iterable<string, array{string, string, string}> to, locale, Location */
     public static function copies(): iterable
     {

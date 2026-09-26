@@ -183,6 +183,15 @@ It saves the choice, to the account too, and returns the visitor to the same pag
 is signed again only while its own signature is still valid under the current key, and only when the re-signed URL
 is that page's copy in the chosen language on the same host; otherwise the visitor returns to the page unchanged.
 
+- Two middlewares join `web`: `ResolveLocale` right after `StartSession` (session, URL and browser, so CSRF, throttle
+  and `auth` refusals speak the visitor's language) and `ApplyLocale` right after `AuthenticateSession` (the account
+  and the entry redirect). Neither answers a request or writes an account before your session check, as long as the
+  priority list ranks that check no later than `\Illuminate\Contracts\Session\Middleware\AuthenticatesSessions`; a
+  list without the contract, like Laravel's `priority()` example, ranks `ApplyLocale` last, so the session check must
+  be listed too. Laravel's `AuthenticateSession` ranks through the contract only when the list has it; otherwise, and
+  for a subclass listed by its own name or a check without the contract like Sanctum's (Jetstream's extends it), list
+  it yourself, no later:
+  `$middleware->appendToPriorityList(\Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests::class, …)`.
 - Call `Route::localized()` outside any prefix group, before catch-all and fallback routes. Inside, prefix with
   `Route::prefix()->group()`, never a route-level `->prefix()`.
 - Put in only pages whose content is translated, plus their forms' POST routes.
@@ -193,12 +202,17 @@ is that page's copy in the chosen language on the same host; otherwise the visit
   `HasLocalePreference` on the User so mail goes out in that language; its links carry the language's prefix.
 - An existing account with an empty `user_locale` gets the visitor's choice on its next visit, as a normal model save
   (model events fire).
+- To save the language your own way, such as through a service that also clears a user cache, register a closure in
+  a service provider's `boot(Seo $seo)`. The package still reads `user_locale`, and sets it on the request's user:
+  `$seo->saveUserLocaleUsing(fn (User $user, string $code) => app(Users::class)->setLocale($user, $code));`
+  It receives whichever guard's model is signed in when that model has the column, so type-hint accordingly.
 - `POST /locale` is registered before your routes. On Laravel 13, a catch-all inside `Route::domain()` that accepts
   POST would take it.
-- A CDN must not cache the HTML of `entry_redirect` pages: they vary per visitor. Crawlers are never redirected.
+- A CDN must not cache the HTML of `entry_redirect` pages: they vary per visitor. Crawlers are never redirected. A
+  `throttle` on such a page counts a redirected arrival twice.
 - A 404 for a URL no route matches renders in the default language unless you have a `Route::fallback()`.
-- Livewire: add `\Seo\Http\ResolveLocale::class` to `Livewire::addPersistentMiddleware()`. Otherwise a component
-  update renders in the saved language, not the page's.
+- Livewire: add `\Seo\Http\ResolveLocale::class` and `\Seo\Http\ApplyLocale::class` to
+  `Livewire::addPersistentMiddleware()`. Otherwise a component update renders in the saved language, not the page's.
 - To 301 old query-parameter URLs (`/terms?lang=fr` to `/fr/terms`), redirect to
   `\Seo\LocalizedRoute::of($request->route())?->path($request->getPathInfo(), $code)`. Check `$code` against your
   codes first: `?lang=/evil.test` would otherwise redirect off-site.
@@ -207,6 +221,14 @@ is that page's copy in the chosen language on the same host; otherwise the visit
   lacks.
 - Remove any locale middleware of your own: it runs after the package's and would override a copy's language.
   `assertHreflangReciprocal()` catches a copy that renders another language.
+
+## Upgrading from 0.3.0
+
+- Delete any priority line of your own that ranks `ResolveLocale`: the package's ranking yields to it, and one after
+  `auth` sends a guest it turns away to `/login`, not `/fr/login`.
+- Livewire: add `\Seo\Http\ApplyLocale::class` to `Livewire::addPersistentMiddleware()` next to `ResolveLocale`.
+- `withoutMiddleware(ResolveLocale::class)` no longer skips the entry redirect or the account fills: they moved to
+  `ApplyLocale`, so name both.
 
 ## Upgrading from 0.2
 

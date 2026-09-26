@@ -9,6 +9,7 @@ use Illuminate\Container\Container;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Contracts\Session\Middleware\AuthenticatesSessions;
 use Illuminate\Foundation\Http\Events\RequestHandled;
 use Illuminate\Foundation\Http\Kernel as HttpKernel;
 use Illuminate\Foundation\Http\Middleware\PreventRequestsDuringMaintenance;
@@ -25,6 +26,7 @@ use LogicException;
 use Seo\Console\CheckCommand;
 use Seo\Console\IndexNowCommand;
 use Seo\Console\InstallCommand;
+use Seo\Http\ApplyLocale;
 use Seo\Http\NoindexHosts;
 use Seo\Http\ResolveLocale;
 use Seo\View\Head;
@@ -79,11 +81,15 @@ class SeoServiceProvider extends ServiceProvider
         $this->callAfterResolving(Kernel::class, static fn (HttpKernel $kernel) => $kernel->pushMiddleware(NoindexHosts::class));
 
         if (Locales::configured() !== null) {
-            // Straight after StartSession: CSRF, signature, throttle and auth refusals then speak the visitor's language.
+            // ResolveLocale straight after StartSession: CSRF, signature, throttle and auth refusals then speak the
+            // visitor's language. ApplyLocale, which reads the user and can answer, straight after AuthenticateSession;
+            // a priority list without it (an app's own priority()) ranks ApplyLocale last, after every listed check.
             $this->callAfterResolving(Kernel::class, static function (HttpKernel $kernel): void {
                 if (array_key_exists('web', $kernel->getMiddlewareGroups())) {
                     $kernel->appendMiddlewareToGroup('web', ResolveLocale::class)
-                        ->addToMiddlewarePriorityAfter(StartSession::class, ResolveLocale::class);
+                        ->appendMiddlewareToGroup('web', ApplyLocale::class)
+                        ->addToMiddlewarePriorityAfter(StartSession::class, ResolveLocale::class)
+                        ->addToMiddlewarePriorityAfter(AuthenticatesSessions::class, ApplyLocale::class);
                 }
             });
 

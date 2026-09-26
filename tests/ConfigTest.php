@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Seo\Http\ApplyLocale;
 use Seo\Http\ResolveLocale;
 use Seo\Locales;
 use Seo\Page;
@@ -195,6 +196,7 @@ final class ConfigTest extends TestCase
         assert($kernel instanceof HttpKernel);
 
         $this->assertNotContains(ResolveLocale::class, $kernel->getMiddlewareGroups()['web']);
+        $this->assertNotContains(ApplyLocale::class, $kernel->getMiddlewareGroups()['web']);
         $this->assertFalse(Route::has('seo.locale'));
     }
 

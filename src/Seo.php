@@ -30,6 +30,8 @@ class Seo
 
     private ?Closure $sitemapResolver = null;
 
+    private ?Closure $userLocaleSaver = null;
+
     public function __construct(private readonly Router $router) {}
 
     /**
@@ -50,6 +52,23 @@ class Seo
     public function sitemapUsing(Closure $resolver): void
     {
         $this->sitemapResolver = $resolver;
+    }
+
+    /**
+     * How a user's language is saved, in place of the package's own Eloquent write: fn (User $user, string $code) =>
+     * app(Users::class)->setLocale($user, $code). The language is still read from config('seo.user_locale'), and the
+     * request's user instance synced afterwards. Receives whichever guard's model is signed in when that model has
+     * the column, so type-hint accordingly.
+     */
+    public function saveUserLocaleUsing(Closure $save): void
+    {
+        $this->userLocaleSaver = $save;
+    }
+
+    /** @internal */
+    public function userLocaleSaver(): ?Closure
+    {
+        return $this->userLocaleSaver;
     }
 
     /**

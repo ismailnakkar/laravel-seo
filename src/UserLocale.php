@@ -11,12 +11,15 @@ use Illuminate\Database\Eloquent\Model;
 /** @internal The signed-in user's language, in the attribute config('seo.user_locale') names. */
 final class UserLocale
 {
-    /** The user's configured code; null without the setting, for a non-Eloquent user, or for an unset or unknown value. */
+    /**
+     * The user's configured code; null without the setting, for a non-Eloquent user or one whose model lacks the column
+     * (another guard's, such as an admin's), or for an unset or unknown value.
+     */
     public static function of(mixed $user, Locales $locales): ?string
     {
         $column = self::column();
 
-        if ($column === null || ! $user instanceof Model) {
+        if ($column === null || ! $user instanceof Model || ! array_key_exists($column, $user->getAttributes())) {
             return null;
         }
 
@@ -27,8 +30,9 @@ final class UserLocale
     }
 
     /**
-     * Through a fresh instance: nothing else the request changed on $user is written, and model events fire, so an
-     * app's observers can clear a user cache. Then $user is synced, so later reads in the request see it.
+     * Through Seo::saveUserLocaleUsing()'s closure, else a fresh instance: nothing else the request changed on $user is
+     * written, and model events fire, so an app's observers can clear a user cache. Then $user is synced, so later
+     * reads in the request see it.
      */
     public static function save(mixed $user, string $code): void
     {
@@ -40,12 +44,21 @@ final class UserLocale
 
         $fresh = $user->newQueryWithoutScopes()->find($user->getKey());
 
-        if (! $fresh instanceof Model) {
+        // The row, not $user: a user created in this request lacks the column until read back.
+        if (! $fresh instanceof Model || ! array_key_exists($column, $fresh->getAttributes())) {
             return;
         }
 
-        $fresh->forceFill([$column => $code])->save();
-        $user->setAttribute($column, $fresh->getAttribute($column));
+        $save = Container::getInstance()->make(Seo::class)->userLocaleSaver();
+
+        if ($save === null) {
+            $fresh->forceFill([$column => $code])->save();
+            $user->setAttribute($column, $fresh->getAttribute($column));
+        } else {
+            $save($user, $code);
+            $user->setAttribute($column, $code);
+        }
+
         $user->syncOriginalAttribute($column);
     }
 

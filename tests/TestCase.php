@@ -189,6 +189,17 @@ abstract class TestCase extends BaseTestCase
             $table->id();
             $table->string('name')->default('');
             $table->string('locale', 20)->nullable();
+            $table->string('password')->nullable();
+            $table->rememberToken();
+            $table->timestamps();
+        });
+    }
+
+    /** The fixture Admin's table, which has no `locale`. */
+    protected function createAdminsTable(): void
+    {
+        Schema::create('admins', static function (Blueprint $table): void {
+            $table->id();
             $table->timestamps();
         });
     }
