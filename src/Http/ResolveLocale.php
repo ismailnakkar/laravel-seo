@@ -12,10 +12,10 @@ use Seo\LocalizedRoute;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * The request's language: a Route::localized() copy's own, else the visitor's choice. Only the switcher changes the
- * choice once it is made. In `web` straight after StartSession when two or more locales are configured, so it must never
- * read the user: restoring a remember-me cookie writes the login into the session before AuthenticateSession has checked
- * it. ApplyLocale brings in the account.
+ * The request's language: a Route::localized() copy's own, else the visitor's choice. In `web` straight after
+ * StartSession when two or more locales are configured, so it must never read the user: restoring a remember-me cookie
+ * writes the login into the session before AuthenticateSession has checked it. ApplyLocale brings in the account and
+ * saves a copy's language as the choice.
  */
 final class ResolveLocale
 {
@@ -43,13 +43,13 @@ final class ResolveLocale
         return $next($request);
     }
 
-    /** @internal The session's, a session's first /fr/… page's, the browser's, else the default. */
+    /** @internal The session's, a new session's opened /fr/… page's (ApplyLocale), the browser's, else the default. */
     public static function choice(Request $request, Locales $locales, ?LocalizedRoute $localized): string
     {
         $saved = $request->hasSession() ? $request->session()->get(self::SESSION_KEY) : null;
 
         return (is_string($saved) && in_array($saved, $locales->codes, true) ? $saved : null)
-            ?? ($localized !== null && $localized->locale !== $locales->default ? $localized->locale : null)
+            ?? ($localized !== null && $localized->locale !== $locales->default && ApplyLocale::opensThePage($request) ? $localized->locale : null)
             ?? $locales->preferredBy($request)
             ?? $locales->default;
     }

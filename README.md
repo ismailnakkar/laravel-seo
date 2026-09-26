@@ -164,9 +164,16 @@ Route::localized(function () {
 current language, every copy emits the same hreflang set with x-default, and a sitemap entry expands to every locale's
 URL.
 
-Every other page renders the visitor's choice. That is their account's `user_locale`, else the session, else the
-language of the first `/fr/…` page of their visit, else the browser's, else the default. Visiting a page never
-changes it; the switcher does:
+Opening a copy makes its language the visitor's choice: saved to the session and, when signed in (or signing in on it,
+with one exception below), to the account's `user_locale` if it differs. The default copy counts, so a click on the logo
+to `/` chooses the default. Opening means a page load or your app's own fetch (Inertia, `wire:navigate`), and from
+another site only a page visit. A signed link does not count (its sender chose its language), nor does a Livewire
+component update, an image or frame of the page from any site (in browsers that send Fetch Metadata), or a form post
+from another site, not even as a new session's first request. A visitor arriving from outside on an `entry_redirect`
+page is sent to their choice's copy first, which saves nothing.
+
+Every page without a language in its URL (a members area, link pages, mail through `HasLocalePreference`) renders the
+choice: the account's, else the session's, else the browser's, else the default. On those pages the switcher sets it:
 
 ```blade
 @inject('seo', \Seo\Seo::class)
@@ -200,22 +207,32 @@ unchanged.
 - Call `Route::localized()` outside any prefix group, before catch-all and fallback routes. Inside, prefix with
   `Route::prefix()->group()`, never a route-level `->prefix()`.
 - Put in only pages whose content is translated, plus their forms' POST routes.
-- Link with `route()`: `url()` and hard-coded paths go to the default copy.
+- Link with `route()`: `url()` and hard-coded paths go to the default copy, so a click on one saves the default
+  language.
 - On `/fr/terms`, `Route::currentRouteName()`, `Route::is()` and `routeIs()` see `terms`. `route:list` still shows
   `seo.fr.terms`.
-- An account without a language takes the page's when it signs up or signs in, so `/fr/register` saves `fr`. Keep
-  `HasLocalePreference` on the User so mail goes out in that language; its links carry the language's prefix.
+- Signing up or signing in on a copy saves its language to the account: a member signing in on `/fr/login` switches to
+  `fr`, and `/fr/register` saves `fr` even over a language your sign-up stores itself. The exception is the copy in the
+  browser's language (the default when none matches), where `auth` sends a new device: like signing in off a copy or
+  through a signed link, it keeps the account's language, as long as signing in lands outside `Route::localized()` (such
+  as `intended()` to a members area); a copy it lands on saves its language like any other. An account without a
+  language takes the copy's, else the choice. Only `Auth::login()` in the request to the copy counts: a Livewire or Volt
+  form, or a 2FA or OAuth step outside `Route::localized()`, keeps the account's language. Keep `HasLocalePreference` on
+  the User so mail goes out in that language; its links carry the language's prefix.
 - An existing account with an empty `user_locale` gets the visitor's choice on its next visit, as a normal model save
   (model events fire).
 - To save the language your own way, such as through a service that also clears a user cache, register a closure in
   a service provider's `boot(Seo $seo)`. The package still reads `user_locale`, and sets it on the request's user:
   `$seo->saveUserLocaleUsing(fn (User $user, string $code) => app(Users::class)->setLocale($user, $code));`
   It receives whichever guard's model is signed in when that model has the column, so type-hint accordingly.
+- Impersonation that signs you in as the member (lab404/laravel-impersonate) saves each copy you open to the member's
+  account; skip the write in `saveUserLocaleUsing()` while impersonating.
 - `POST /locale` is registered before your routes. On Laravel 13, a catch-all inside `Route::domain()` that accepts
   POST would take it.
 - A CDN must not cache the HTML of `entry_redirect` pages: they vary per visitor. Crawlers are never redirected. Under
   Laravel's priority list, a `throttle` on such a page counts a redirected arrival twice.
-- A 404 for a URL no route matches renders in the default language unless you have a `Route::fallback()`.
+- A 404 for a URL no route matches renders in the default language unless you have a `Route::fallback()`, so its
+  links go to the default copy and a click on one saves the default.
 - Livewire: add `\Seo\Http\ResolveLocale::class` and `\Seo\Http\ApplyLocale::class` to
   `Livewire::addPersistentMiddleware()`. Otherwise a component update renders in the saved language, not the page's.
 - To 301 old query-parameter URLs (`/terms?lang=fr` to `/fr/terms`), redirect to
@@ -226,6 +243,16 @@ unchanged.
   lacks.
 - Remove any locale middleware of your own: it runs after the package's and would override a copy's language.
   `assertHreflangReciprocal()` catches a copy that renders another language.
+
+## Upgrading from 0.3.2
+
+- Opening a `Route::localized()` page now saves its language as the visitor's choice: to the session, and to the
+  account's `user_locale` when it differs, signing in on the page included unless it is the copy in the browser's
+  language (the default when none matches). Before, a page only set a new session's choice (its first `/fr/…` page,
+  however it came) and filled an account without a language; replacing a choice took the switcher. A signed link, an
+  image or frame, or another site's form post now sets no choice, not even a new session's.
+- A click on a link to the default copy, such as a `url()` or hard-coded path, or a 404 page's logo, now saves the
+  default language. Link with `route()`.
 
 ## Upgrading from 0.3.1
 

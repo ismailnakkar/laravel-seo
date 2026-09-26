@@ -15,9 +15,10 @@ use Seo\UserLocale;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * The signed-in user's side of the language: their account's code beats the visitor's choice, an account without one
- * is filled, and the entry redirect. In `web` straight after AuthenticateSession when two or more locales are
- * configured: the user is only safe to read, and the request to answer, once that has checked the session.
+ * The signed-in user's side of the language and the entry redirect: the account's code beats the visitor's choice,
+ * and opening a Route::localized() copy makes its language the choice, in the session and the account. In `web`
+ * straight after AuthenticateSession when two or more locales are configured: the user is only safe to read, and the
+ * request to answer, once that has checked the session.
  */
 final class ApplyLocale
 {
@@ -35,30 +36,43 @@ final class ApplyLocale
         $user = $request->user();
         $account = UserLocale::of($user, $locales);
         $choice = $account ?? ResolveLocale::choice($request, $locales, $localized);
-        $page = $localized->locale ?? $choice;
-
-        if ($request->hasSession()) {
-            $request->session()->put(ResolveLocale::SESSION_KEY, $choice);
-        }
-
-        if ($user !== null && $account === null) {
-            rescue(static fn () => UserLocale::save($user, $choice));
-        }
-
-        $this->app->setLocale($page);
-
         $target = $this->entryTarget($request, $locales, $localized, $choice);
 
+        // Before anything is saved: an arrival on the default copy would otherwise save the default over the choice.
         if ($target !== null) {
             return redirect()->to($target);
         }
 
+        $page = $localized->locale ?? $choice;
+        // null off a copy, or when this request is not the visitor opening it (a signed link, an <img> of it).
+        $opened = self::opensThePage($request) ? $localized?->locale : null;
+        $saved = $opened ?? $choice;
+
+        if ($request->hasSession()) {
+            $request->session()->put(ResolveLocale::SESSION_KEY, $saved);
+        }
+
+        // Only on a change, never every page view: an empty account, or a copy in another language.
+        if ($user !== null && $account !== $saved) {
+            rescue(static fn () => UserLocale::save($user, $saved));
+        }
+
+        $this->app->setLocale($page);
+
         $response = $next($request);
 
-        // Signed in during this request (a sign-up, a sign-in): an account without a language takes the page's. The
-        // user before $next counts, so an admin impersonating a member later in the stack never writes theirs.
-        if ($user === null && ($signedIn = $request->user()) !== null && UserLocale::of($signedIn, $locales) === null) {
-            rescue(static fn () => UserLocale::save($signedIn, $page));
+        // Signed in during this request (a sign-up, a sign-in): a copy opened replaces the account's language, and
+        // anything else only fills an empty one, as the guest's choice never beats the account. The browser's copy is
+        // no choice: `auth` sends a new device's guest to route('login') in it. The user before $next counts, so an
+        // admin impersonating a member later in the stack never writes theirs.
+        if ($user === null && ($signedIn = $request->user()) !== null) {
+            $account = UserLocale::of($signedIn, $locales);
+            $chosen = $opened === ($locales->preferredBy($request) ?? $locales->default) ? null : $opened;
+            $code = $chosen ?? $account ?? $saved;
+
+            if ($account !== $code) {
+                rescue(static fn () => UserLocale::save($signedIn, $code));
+            }
         }
 
         return $response;
@@ -86,6 +100,24 @@ final class ApplyLocale
         $query = (string)$request->server->get('QUERY_STRING');
 
         return $localized->path($request->getPathInfo(), $choice) . ($query === '' ? '' : "?{$query}");
+    }
+
+    /**
+     * @internal Never a signed link: its sender chose its language, as for the entry redirect. From another site only a
+     * top-level GET: a SameSite=None session cookie also follows an <img>, iframe or fetch from any site, and an app
+     * may rank its CSRF check after this, so a forged POST is refused too late. From this site a page load or the app's
+     * own fetch (Inertia, wire:navigate), never an <img> or iframe, which user content on the site could point at a
+     * copy. No Sec-Fetch-Dest: a browser without Fetch Metadata. Never a Livewire component update: its persistent
+     * middleware replays the page's route with /livewire/update's query, so a signed page would lose its signature.
+     */
+    public static function opensThePage(Request $request): bool
+    {
+        $dest = $request->headers->get('Sec-Fetch-Dest');
+
+        return ! $request->query->has('signature') && ! $request->headers->has('X-Livewire')
+            && ($request->headers->get('Sec-Fetch-Site') === 'cross-site'
+            ? $request->isMethod('GET') && $dest === 'document'
+            : in_array($dest, [null, 'document', 'empty'], true));
     }
 
     /** Sec-Fetch-Site, or where a browser sends none (Safari before 16.4, plain HTTP), a Referer on this host. */

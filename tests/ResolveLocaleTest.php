@@ -30,6 +30,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Exceptions;
+use Illuminate\Support\Facades\URL;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 use Orchestra\Testbench\Attributes\DefineEnvironment;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -47,35 +48,39 @@ final class ResolveLocaleTest extends LanguagesTestCase
     protected function defineWebRoutes($router): void
     {
         $locale = static fn (): string => app()->getLocale();
+        // Like cuty's login-as: the admin's session, the member for the rest of the request. Route::middleware()
+        // only accepts middleware names, never a raw Closure (it casts every entry to string), so the swap happens
+        // in the route's own action instead; ApplyLocale, in the `web` group, has already run by then either way.
+        $loginAs = static function (Request $request) use ($locale): string {
+            Auth::onceUsingId((int)$request->route('member'));
 
-        $router->localized(static function (Router $router) use ($locale): void {
+            return $locale();
+        };
+        $signIn = static function () use ($locale): string {
+            Auth::login(User::query()->where('name', 'member')->firstOrFail());
+
+            return $locale();
+        };
+
+        $router->localized(static function (Router $router) use ($locale, $loginAs, $signIn): void {
             $router->match(['GET', 'HEAD', 'POST', 'QUERY'], '/', $locale)->name('home');
             $router->get('terms', $locale)->name('terms');
             $router->get('login', $locale)->name('login');
+            $router->get('login-as/{member}', $loginAs);
             $router->post('sign-up', static function (): string {
                 Auth::login(User::create(['name' => 'new']));
 
                 return app()->getLocale();
             });
-            $router->post('sign-in', static function (): string {
-                Auth::login(User::query()->where('name', 'member')->firstOrFail());
-
-                return app()->getLocale();
-            });
+            $router->post('sign-in', $signIn);
         });
         $router->get('plain', $locale);
+        $router->post('members/sign-in', $signIn);
         $router->get('members', $locale)->middleware('auth')->name('members');
         $router->get('admin', $locale)->middleware('auth:admin');
         $router->get('limited', $locale)->middleware('throttle:1,1');
         $router->get('recent', $locale)->middleware(RequireRecentSignIn::class);
-        // Like cuty's login-as: the admin's session, the member for the rest of the request. Route::middleware()
-        // only accepts middleware names, never a raw Closure (it casts every entry to string), so the swap happens
-        // in the route's own action instead; ApplyLocale, in the `web` group, has already run by then either way.
-        $router->get('as/{member}', static function (Request $request) use ($locale): string {
-            Auth::onceUsingId((int)$request->route('member'));
-
-            return $locale();
-        });
+        $router->get('as/{member}', $loginAs);
         // Its XSRF cookie also reads the session, so it must go too: excluding just StartSession leaves it crashing.
         // Both names: the `web` group carries VerifyCsrfToken on Laravel 12, PreventRequestForgery from 13 on.
         $router->get('sessionless', $locale)->withoutMiddleware([StartSession::class, ShareErrorsFromSession::class, VerifyCsrfToken::class, PreventRequestForgery::class]);
@@ -106,6 +111,7 @@ final class ResolveLocaleTest extends LanguagesTestCase
             $middleware->appendToPriorityList(after: AuthenticatesRequests::class, append: AppAuthenticateSession::class);
             $middleware->appendToPriorityList(after: AppAuthenticateSession::class, append: ApplyLocale::class);
             $middleware->prependToPriorityList(before: ThrottleRequests::class, prepend: PreventRequestForgery::class);
+            $middleware->prependToPriorityList(before: ThrottleRequests::class, prepend: VerifyCsrfToken::class); // Laravel 12's
             $middleware->prependToPriorityList(before: ThrottleRequests::class, prepend: RequireRecentSignIn::class);
             $middleware->prependToPriorityList(before: ThrottleRequests::class, prepend: ValidateSignature::class);
             $middleware->web(append: AppAuthenticateSession::class);
@@ -197,13 +203,14 @@ final class ResolveLocaleTest extends LanguagesTestCase
         $this->withSession([ResolveLocale::SESSION_KEY => 'fr'])->get('/members')->assertRedirect('/fr/login');
     }
 
-    public function test_a_copy_renders_its_own_language_and_visiting_it_never_changes_the_choice(): void
+    public function test_a_copy_renders_its_own_language_and_opening_it_makes_that_the_choice(): void
     {
         $this->withSession([ResolveLocale::SESSION_KEY => 'fr']);
 
         $this->get('/es/terms')->assertContent('es');
+        $this->get('/plain')->assertContent('es');
         $this->get('/terms')->assertContent('en');
-        $this->get('/plain')->assertContent('fr');
+        $this->get('/plain')->assertContent('en');
     }
 
     public function test_the_account_beats_the_session_and_corrects_it(): void
@@ -235,6 +242,23 @@ final class ResolveLocaleTest extends LanguagesTestCase
         $this->get('/plain')->assertContent('es');
     }
 
+    /** @return iterable<string, array{string, array<string, string>}> URI, headers */
+    public static function firstRequestsOpeningNoCopy(): iterable
+    {
+        yield 'an <img> on another site' => ['/fr/terms', ['Sec-Fetch-Site' => 'cross-site', 'Sec-Fetch-Dest' => 'image']];
+        yield 'a forwarded signed link' => ['/fr/terms?signature=x', []];
+    }
+
+    /** @param array<string, string> $headers */
+    #[DataProvider('firstRequestsOpeningNoCopy')]
+    public function test_a_sessions_first_request_that_does_not_open_its_copy_sets_no_choice(string $uri, array $headers): void
+    {
+        $this->withHeaders(['Accept-Language' => 'es', ...$headers])->get($uri)->assertContent('fr');
+
+        // Not /fr/login, where signing in would give the account the copy's language.
+        $this->get('/members')->assertRedirect('/es/login');
+    }
+
     public function test_the_browser_then_the_default(): void
     {
         $this->withHeaders(['Accept-Language' => 'fr-CA,en;q=0.5'])->get('/plain')->assertContent('fr');
@@ -248,38 +272,193 @@ final class ResolveLocaleTest extends LanguagesTestCase
         $this->withSession([ResolveLocale::SESSION_KEY => 'de'])->withHeaders(['Accept-Language' => 'es'])->get('/plain')->assertContent('es');
     }
 
-    public function test_an_account_without_a_language_takes_the_choice_not_the_pages(): void
+    public function test_an_account_without_a_language_takes_the_copys(): void
     {
         $user = User::create(['name' => 'member']);
 
         $this->actingAs($user)->withSession([ResolveLocale::SESSION_KEY => 'es'])->get('/fr/terms')->assertContent('fr');
 
-        $this->assertSame('es', $user->fresh()?->locale);
+        $this->assertSame('fr', $user->fresh()?->locale);
     }
 
-    public function test_an_account_language_is_never_overwritten(): void
+    public function test_opening_a_copy_saves_its_language_to_the_session_and_the_account_by_any_method(): void
     {
         $user = User::create(['name' => 'member', 'locale' => 'ar']);
 
         $this->actingAs($user)->withSession([ResolveLocale::SESSION_KEY => 'fr'])->get('/es/terms')->assertContent('es');
 
-        $this->assertSame('ar', $user->fresh()?->locale);
+        $this->assertSame('es', session(ResolveLocale::SESSION_KEY));
+        $this->assertSame('es', $user->fresh()?->locale);
+        $this->get('/plain')->assertContent('es');
+
+        $this->post('/fr')->assertContent('fr');
+
+        $this->assertSame('fr', User::query()->whereKey($user->id)->value('locale'));
+    }
+
+    public function test_a_copy_in_the_accounts_language_writes_nothing(): void
+    {
+        $user = User::create(['name' => 'member', 'locale' => 'fr']);
+        $user->mergeCasts(['locale' => LocaleCode::class]);
+        $codes = [];
+        $this->seo()->saveUserLocaleUsing(static function (User $user, string $code) use (&$codes): void {
+            $codes[] = $code;
+        });
+
+        $this->actingAs($user)->get('/fr/terms')->assertContent('fr');
+        $this->get('/plain')->assertContent('fr');
+
+        $this->assertSame([], $codes);
+    }
+
+    public function test_a_click_inside_the_site_onto_the_default_copy_saves_the_default(): void
+    {
+        $member = User::create(['name' => 'member', 'locale' => 'fr']);
+
+        $this->actingAs($member)->withHeaders(['Sec-Fetch-Site' => 'same-origin'])->get('/')->assertOk()->assertContent('en');
+
+        $this->assertSame('en', session(ResolveLocale::SESSION_KEY));
+        $this->assertSame('en', $member->fresh()?->locale);
+    }
+
+    public function test_a_page_visit_from_another_site_saves_its_language(): void
+    {
+        $member = User::create(['name' => 'member', 'locale' => 'en']);
+
+        $this->actingAs($member)->withHeaders(['Sec-Fetch-Site' => 'cross-site', 'Sec-Fetch-Dest' => 'document'])->get('/es/terms')->assertContent('es');
+
+        $this->assertSame('es', session(ResolveLocale::SESSION_KEY));
+        $this->assertSame('es', $member->fresh()?->locale);
+    }
+
+    public function test_a_signed_link_never_saves_its_language(): void
+    {
+        $member = User::create(['name' => 'member', 'locale' => 'fr']);
+        $url = URL::signedRoute('terms');
+
+        // From webmail: whoever sent the mail chose the link's language, not the member.
+        $this->actingAs($member)->withHeaders(['Sec-Fetch-Site' => 'cross-site', 'Sec-Fetch-Dest' => 'document'])->get($url)->assertOk()->assertContent('en');
+
+        $this->assertSame('fr', session(ResolveLocale::SESSION_KEY));
+        $this->assertSame('fr', $member->fresh()?->locale);
+    }
+
+    /** @return iterable<string, array{array<string, string>, bool}> headers, whether the copy's language is saved */
+    public static function loadsOfACopy(): iterable
+    {
+        yield 'an <img> on another site' => [['Sec-Fetch-Site' => 'cross-site', 'Sec-Fetch-Dest' => 'image'], false];
+        yield 'an <img> on the same origin' => [['Sec-Fetch-Site' => 'same-origin', 'Sec-Fetch-Dest' => 'image'], false];
+        yield 'an <iframe> on the same site' => [['Sec-Fetch-Site' => 'same-site', 'Sec-Fetch-Dest' => 'iframe'], false];
+        yield 'a click on the same origin' => [['Sec-Fetch-Site' => 'same-origin', 'Sec-Fetch-Dest' => 'document'], true];
+        yield 'a fetch on the same origin: Inertia, wire:navigate' => [['Sec-Fetch-Site' => 'same-origin', 'Sec-Fetch-Dest' => 'empty', 'X-Livewire-Navigate' => '1'], true];
+        yield 'a Livewire update replaying the page, which drops its query' => [['Sec-Fetch-Site' => 'same-origin', 'Sec-Fetch-Dest' => 'empty', 'X-Livewire' => '1'], false];
+    }
+
+    /** @param array<string, string> $headers */
+    #[DataProvider('loadsOfACopy')]
+    public function test_only_a_page_load_or_the_apps_own_fetch_saves_a_copys_language(array $headers, bool $saves): void
+    {
+        $member = User::create(['name' => 'member', 'locale' => 'en']);
+        $codes = [];
+        $this->seo()->saveUserLocaleUsing(static function (User $user, string $code) use (&$codes): void {
+            $codes[] = $code;
+        });
+
+        $this->actingAs($member)->withHeaders($headers)->get('/ar')->assertOk()->assertContent('ar');
+
+        $this->assertSame($saves ? ['ar'] : [], $codes);
+        $this->assertSame($saves ? 'ar' : 'en', session(ResolveLocale::SESSION_KEY));
+    }
+
+    public function test_a_copy_embedded_by_another_site_never_saves_its_language(): void
+    {
+        $member = User::create(['name' => 'member']);
+
+        // An <img>: a SameSite=None session cookie follows it from any site. The empty account still gets the choice.
+        $this->actingAs($member)->withSession([ResolveLocale::SESSION_KEY => 'es'])
+            ->withHeaders(['Sec-Fetch-Site' => 'cross-site', 'Sec-Fetch-Dest' => 'image'])->get('/ar')->assertOk()->assertContent('ar');
+
+        $this->assertSame('es', session(ResolveLocale::SESSION_KEY));
+        $this->assertSame('es', $member->fresh()?->locale);
+    }
+
+    #[DefineEnvironment('sessionCheckRankedEarly')]
+    public function test_a_forged_post_refused_by_csrf_ranked_after_the_account_saves_nothing(): void
+    {
+        $member = User::create(['name' => 'member', 'locale' => 'en', 'password' => 'hash-now']);
+        $codes = [];
+        $this->seo()->saveUserLocaleUsing(static function (User $user, string $code) use (&$codes): void {
+            $codes[] = $code;
+        });
+        $this->app->offsetSet('env', 'production');
+
+        $this->actingAs($member)->withHeaders(['Sec-Fetch-Site' => 'cross-site', 'Sec-Fetch-Dest' => 'document'])->post('/ar')->assertStatus(419);
+
+        $this->assertSame([], $codes);
     }
 
     public function test_signing_up_saves_the_pages_language(): void
     {
-        $this->withSession([ResolveLocale::SESSION_KEY => 'es'])->post('/fr/sign-up')->assertContent('fr');
+        // The browser's copy too: it replaces no account's language, but fills an empty one.
+        $this->withSession([ResolveLocale::SESSION_KEY => 'es'])->withHeaders(['Accept-Language' => 'fr'])->post('/fr/sign-up')->assertContent('fr');
 
         $this->assertSame('fr', User::query()->where('name', 'new')->value('locale'));
     }
 
-    public function test_signing_in_never_overwrites_the_accounts_language(): void
+    public function test_signing_in_on_a_copy_saves_its_language_to_the_account(): void
     {
         $member = User::create(['name' => 'member', 'locale' => 'ar']);
 
-        $this->withSession([ResolveLocale::SESSION_KEY => 'es'])->post('/fr/sign-in')->assertContent('fr');
+        $this->withSession([ResolveLocale::SESSION_KEY => 'es'])->get('/fr/login')->assertContent('fr');
+        $this->post('/fr/sign-in')->assertContent('fr');
+
+        $this->assertSame('fr', $member->fresh()?->locale);
+        $this->get('/members')->assertOk()->assertContent('fr');
+    }
+
+    /** @return iterable<string, array{string, string}> the browser's language, the login page's prefix */
+    public static function newDevices(): iterable
+    {
+        yield 'a browser in another language' => ['es', '/es'];
+        yield 'a browser in none of them' => ['de', ''];
+    }
+
+    #[DataProvider('newDevices')]
+    public function test_signing_in_on_the_copy_the_browser_picked_keeps_the_accounts_language(string $browser, string $prefix): void
+    {
+        $member = User::create(['name' => 'member', 'locale' => 'ar']);
+
+        // No session yet: `auth` sends the guest to the login page in the browser's language, not one they chose.
+        $this->withHeaders(['Accept-Language' => $browser])->get('/members')->assertRedirect("{$prefix}/login");
+        $this->post("{$prefix}/sign-in")->assertOk();
 
         $this->assertSame('ar', $member->fresh()?->locale);
+        $this->get('/members')->assertContent('ar');
+    }
+
+    /** @return iterable<string, array{string, ?string, string}> URI, the account's language before and after */
+    public static function signInsOpeningNoCopy(): iterable
+    {
+        yield 'off a copy' => ['/members/sign-in', 'ar', 'ar'];
+        yield 'through a signed link' => ['/fr/sign-in?signature=x', 'ar', 'ar'];
+        yield 'through a signed link, an account without a language' => ['/fr/sign-in?signature=x', null, 'es'];
+    }
+
+    #[DataProvider('signInsOpeningNoCopy')]
+    public function test_signing_in_without_opening_a_copy_keeps_the_choice(string $uri, ?string $before, string $after): void
+    {
+        $member = User::create(['name' => 'member', 'locale' => $before]);
+        $codes = [];
+        $this->seo()->saveUserLocaleUsing(static function (User $user, string $code) use (&$codes): void {
+            $codes[] = $code;
+            User::query()->whereKey($user->getKey())->update(['locale' => $code]);
+        });
+
+        $this->withSession([ResolveLocale::SESSION_KEY => 'es'])->post($uri)->assertOk();
+
+        $this->assertSame($before === $after ? [] : [$after], $codes);
+        $this->assertSame($after, $member->fresh()?->locale);
+        $this->get('/plain')->assertContent($after);
     }
 
     public function test_an_admin_signed_in_as_a_member_never_writes_the_members_account(): void
@@ -291,6 +470,17 @@ final class ResolveLocaleTest extends LanguagesTestCase
 
         $this->assertNull($member->fresh()?->locale);
         $this->assertSame('ar', $admin->fresh()?->locale);
+    }
+
+    public function test_an_admin_signed_in_as_a_member_on_a_copy_saves_only_the_admins_account(): void
+    {
+        $admin = User::create(['name' => 'admin', 'locale' => 'ar']);
+        $member = User::create(['name' => 'member']);
+
+        $this->actingAs($admin)->get("/fr/login-as/{$member->id}")->assertOk()->assertContent('fr');
+
+        $this->assertNull($member->fresh()?->locale);
+        $this->assertSame('fr', $admin->fresh()?->locale);
     }
 
     public function test_a_failed_write_after_the_page_is_reported_and_the_page_still_served(): void
@@ -454,7 +644,12 @@ final class ResolveLocaleTest extends LanguagesTestCase
 
     public function test_a_saved_member_typing_the_domain_lands_on_their_language(): void
     {
-        $this->actingAs(User::create(['name' => 'member', 'locale' => 'ar']))->get('/')->assertRedirect('/ar');
+        $member = User::create(['name' => 'member', 'locale' => 'ar']);
+
+        $this->actingAs($member)->withSession([ResolveLocale::SESSION_KEY => 'es'])->get('/')->assertRedirect('/ar');
+
+        $this->assertSame('es', session(ResolveLocale::SESSION_KEY));
+        $this->assertSame('ar', $member->fresh()?->locale);
     }
 
     public function test_the_redirect_is_opt_in_per_route(): void
