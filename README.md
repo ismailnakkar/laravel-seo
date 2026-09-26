@@ -51,7 +51,7 @@ off. A malformed `url` or `disallow` entry throws. To change the markup, run
 | `sitemap` | `[]` | Route names, paths or URLs to list. See [Sitemaps](#sitemaps). |
 | `index_now_key` | `INDEXNOW_KEY` | See [IndexNow](#indexnow). |
 | `routes` | `true` | Serve `/robots.txt`, `/sitemap.xml`, `/sitemap-{n}.xml` and `/indexnow-key.txt`. `false`: you serve them, and `seo:indexnow` needs your key route named `seo.indexnow`. |
-| `locales` | `[]` | Languages, `code => name` in that language; the first is the default. See [Languages](#languages). |
+| `locales` | `[]` | Language codes; the first is the default. See [Languages](#languages). |
 | `user_locale` | `null` | The signed-in user's attribute holding their language. `null`: the session only. |
 | `entry_redirect` | `[]` | Route names whose default copy sends a visitor arriving from outside to their language. |
 
@@ -149,7 +149,7 @@ Sitemap: https://example.com/sitemap.xml
 
 ```php
 // config/seo.php
-'locales' => ['en' => 'English', 'fr' => 'Français', 'es' => 'Español'], // the first is the default
+'locales' => ['en', 'fr', 'es'], // the first is the default
 'user_locale' => 'locale',    // the users' column; null keeps the choice in the session only
 'entry_redirect' => ['home'], // these pages send a visitor arriving from outside to their language
 
@@ -174,14 +174,16 @@ changes it; the switcher does:
     @csrf
     <input type="hidden" name="to" value="{{ request()->getRequestUri() }}">
     @foreach ($seo->languages() as $language)
-        <button name="locale" value="{{ $language->code }}" lang="{{ $language->code }}" @if ($language->current) aria-current="true" @endif>{{ $language->name }}</button>
+        <button name="locale" value="{{ $language->code }}" lang="{{ $language->code }}" @if ($language->current) aria-current="true" @endif>{{ __("languages.{$language->code}", locale: $language->code) }}</button>
     @endforeach
 </form>
 ```
 
-It saves the choice, to the account too, and returns the visitor to the same page in that language. A signed page
-is signed again only while its own signature is still valid under the current key, and only when the re-signed URL
-is that page's copy in the chosen language on the same host; otherwise the visitor returns to the page unchanged.
+The labels are your own text, each read in its own language (French from `lang/fr/languages.php`) to match its
+`lang`. The switcher saves the choice, to the account too, and returns the visitor to the same page in that language.
+A signed page is signed again only while its own signature is still valid under the current key, and only when the
+re-signed URL is that page's copy in the chosen language on the same host; otherwise the visitor returns to the page
+unchanged.
 
 - Two middlewares join `web`: `ResolveLocale` right after `StartSession` (session, URL and browser, so CSRF, throttle
   and `auth` refusals speak the visitor's language) and `ApplyLocale` right after `AuthenticateSession` (the account
@@ -192,6 +194,9 @@ is that page's copy in the chosen language on the same host; otherwise the visit
   for a subclass listed by its own name or a check without the contract like Sanctum's (Jetstream's extends it), list
   it yourself, no later:
   `$middleware->appendToPriorityList(\Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests::class, …)`.
+- If your app ranks its session check earlier than Laravel's default (e.g. right after `auth`), rank `ApplyLocale`
+  after it too, never ahead of `auth`, so refusals between the two speak the account's language:
+  `$middleware->appendToPriorityList(after: AuthenticateSession::class, append: \Seo\Http\ApplyLocale::class);`
 - Call `Route::localized()` outside any prefix group, before catch-all and fallback routes. Inside, prefix with
   `Route::prefix()->group()`, never a route-level `->prefix()`.
 - Put in only pages whose content is translated, plus their forms' POST routes.
@@ -208,8 +213,8 @@ is that page's copy in the chosen language on the same host; otherwise the visit
   It receives whichever guard's model is signed in when that model has the column, so type-hint accordingly.
 - `POST /locale` is registered before your routes. On Laravel 13, a catch-all inside `Route::domain()` that accepts
   POST would take it.
-- A CDN must not cache the HTML of `entry_redirect` pages: they vary per visitor. Crawlers are never redirected. A
-  `throttle` on such a page counts a redirected arrival twice.
+- A CDN must not cache the HTML of `entry_redirect` pages: they vary per visitor. Crawlers are never redirected. Under
+  Laravel's priority list, a `throttle` on such a page counts a redirected arrival twice.
 - A 404 for a URL no route matches renders in the default language unless you have a `Route::fallback()`.
 - Livewire: add `\Seo\Http\ResolveLocale::class` and `\Seo\Http\ApplyLocale::class` to
   `Livewire::addPersistentMiddleware()`. Otherwise a component update renders in the saved language, not the page's.
@@ -222,6 +227,13 @@ is that page's copy in the chosen language on the same host; otherwise the visit
 - Remove any locale middleware of your own: it runs after the package's and would override a copy's language.
   `assertHreflangReciprocal()` catches a copy that renders another language.
 
+## Upgrading from 0.3.1
+
+- `seo.locales` is a list of codes, default first: `['en', 'fr', 'es']`. `code => name` still reads; the names are
+  ignored.
+- `$language->name` is gone: label the switcher with your own text, each in its own language, such as
+  `{{ __("languages.{$language->code}", locale: $language->code) }}`.
+
 ## Upgrading from 0.3.0
 
 - Delete any priority line of your own that ranks `ResolveLocale`: the package's ranking yields to it, and one after
@@ -232,7 +244,7 @@ is that page's copy in the chosen language on the same host; otherwise the visit
 
 ## Upgrading from 0.2
 
-- Move the codes into `seo.locales` as `code => name`, default first, and drop the `Locales` argument:
+- Move the codes into `seo.locales`, default first, and drop the `Locales` argument:
   `Route::localized(function () { … })`.
 - `Seo\Http\SetLocale` is gone. Remove any locale middleware of your own: it would override a copy's language.
 - A localized copy answers to the route's own name: `terms` on `/fr/terms`, no longer `seo.fr.terms`.

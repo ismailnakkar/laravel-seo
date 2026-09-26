@@ -172,10 +172,10 @@ abstract class TestCase extends BaseTestCase
         return new Locales($codes, $codes[0]);
     }
 
-    /** @param list<string> $codes the first is the default; each is its own name, as no test renders them */
+    /** @param list<string> $codes the first is the default */
     protected function withLocalizedRoutes(array $codes, Closure $routes): void
     {
-        config(['seo.locales' => array_combine($codes, $codes)]);
+        config(['seo.locales' => $codes]);
         $router = $this->app->make(Router::class);
         $router->middleware('web')->group(static fn (Router $router) => $router->localized($routes));
         $router->getRoutes()->refreshNameLookups();

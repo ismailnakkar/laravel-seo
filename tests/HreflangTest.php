@@ -132,7 +132,7 @@ final class HreflangTest extends TestCase
     public function test_malformed_locales_throw(array $codes, string $default): void
     {
         $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('Locales::');
+        $this->expectExceptionMessage('seo.locales: ');
 
         new Locales($codes, $default);
     }

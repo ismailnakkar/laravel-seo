@@ -18,49 +18,46 @@ final readonly class Locales
      * @param  string  $default  the bare URL's locale and x-default. Pass a constant, never config('app.locale'):
      *                           Application::setLocale() overwrites that key.
      *
-     * @throws InvalidArgumentException empty or duplicate codes; a malformed code; default not in codes
+     * @throws InvalidArgumentException a malformed or duplicate code; default not in codes, as with none
      */
     public function __construct(public array $codes, public string $default)
     {
-        foreach ($codes as $code) {
+        foreach ($codes as $i => $code) {
             if (! is_string($code) || preg_match('/^[a-z]{2}(-[A-Z][a-z]{3})?(-[A-Z]{2})?$/D', $code) !== 1) {
-                throw new InvalidArgumentException('Locales::$codes: [' . (is_string($code) ? $code : get_debug_type($code)) . '] is not an hreflang code like en, en-GB or zh-Hant.');
+                throw new InvalidArgumentException('seo.locales: [' . (is_string($code) ? $code : get_debug_type($code)) . '] is not an hreflang code like en, en-GB or zh-Hant.');
+            }
+
+            if (array_search($code, $codes, true) !== $i) {
+                throw new InvalidArgumentException("seo.locales: [{$code}] is listed twice.");
             }
         }
 
-        if ($codes === [] || count(array_unique($codes)) !== count($codes)) {
-            throw new InvalidArgumentException('Locales::$codes must be non-empty and hold no duplicates.');
-        }
-
         if (! in_array($default, $codes, true)) {
-            throw new InvalidArgumentException("Locales::\$default [{$default}] is not one of the codes.");
+            throw new InvalidArgumentException("seo.locales: the default [{$default}] is not one of the codes.");
         }
     }
 
     /**
      * config('seo.locales'), its first code the default; null below two, where the language features are off.
      *
-     * @throws InvalidArgumentException a key that is not an hreflang code, or a name that is not a non-empty string
+     * @throws InvalidArgumentException neither a list of hreflang codes nor code => name; a duplicate code
      */
     public static function configured(): ?self
     {
         $locales = Container::getInstance()->make('config')->get('seo.locales');
 
-        if (! is_array($locales) || count($locales) < 2) {
+        if (blank($locales) || $locales === false) {
             return null;
         }
 
-        $codes = [];
+        // Integer keys: a list, gaps and all (array_filter()). Otherwise the older code => name form, names unused.
+        $codes = is_array($locales) ? (array_filter(array_keys($locales), is_string(...)) === [] ? array_values($locales) : array_keys($locales)) : null;
 
-        foreach ($locales as $code => $name) {
-            if (! is_string($code) || ! is_string($name) || trim($name) === '') {
-                throw new InvalidArgumentException("seo.locales: write code => name, e.g. 'fr' => 'Français'.");
-            }
-
-            $codes[] = $code;
+        if ($codes === null || ! array_all($codes, static fn (mixed $code): bool => is_string($code))) {
+            throw new InvalidArgumentException("seo.locales: list the codes, default first, e.g. ['en', 'fr'].");
         }
 
-        return new self($codes, $codes[0]);
+        return count($codes) < 2 ? null : new self($codes, $codes[0]);
     }
 
     /**

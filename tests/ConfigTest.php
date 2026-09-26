@@ -163,31 +163,55 @@ final class ConfigTest extends TestCase
         $this->assertSame(['From config', null], [$site->name, $site->image]);
     }
 
-    /** @return iterable<string, array{mixed}> */
+    /** @return iterable<string, array{mixed, string}> config, message */
     public static function malformedLocales(): iterable
     {
-        yield 'a list without names' => [['en', 'fr']];
-        yield 'an empty name' => [['en' => 'English', 'fr' => ' ']];
-        yield 'a malformed code' => [['en' => 'English', 'EN_us' => 'US']];
+        yield 'a duplicate code' => [['en', 'fr', 'en'], 'seo.locales: [en] is listed twice.'];
+        yield 'a malformed code' => [['en', 'EN_us'], '[EN_us] is not an hreflang code'];
+        yield 'a malformed code as a key' => [['en' => 'English', 'EN_us' => 'US'], '[EN_us] is not an hreflang code'];
+        yield 'a code that is not a string' => [['en', 1], "seo.locales: list the codes, default first, e.g. ['en', 'fr']."];
+        yield 'codes and names mixed' => [['en', 'fr' => 'Français'], "seo.locales: list the codes, default first, e.g. ['en', 'fr']."];
+        yield 'not a list' => ['en,fr', "seo.locales: list the codes, default first, e.g. ['en', 'fr']."];
     }
 
     #[DataProvider('malformedLocales')]
-    public function test_malformed_locales_throw(mixed $locales): void
+    public function test_malformed_locales_throw(mixed $locales, string $message): void
     {
         config(['seo.locales' => $locales]);
 
         $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage($message);
 
         Locales::configured();
     }
 
-    public function test_the_first_of_two_or_more_locales_is_the_default_and_one_is_none(): void
+    public function test_the_first_of_two_or_more_locales_is_the_default_and_one_false_or_null_is_none(): void
     {
-        config(['seo.locales' => ['fr' => 'Français', 'en' => 'English']]);
+        config(['seo.locales' => ['fr', 'en']]);
         $this->assertEquals(new Locales(['fr', 'en'], 'fr'), Locales::configured());
 
-        config(['seo.locales' => ['en' => 'English']]);
+        config(['seo.locales' => ['en']]);
         $this->assertNull(Locales::configured());
+
+        config(['seo.locales' => false]);
+        $this->assertNull(Locales::configured());
+
+        config(['seo.locales' => null]);
+        $this->assertNull(Locales::configured());
+    }
+
+    public function test_a_list_with_gaps_reads_its_codes_in_order(): void
+    {
+        config(['seo.locales' => array_filter(['fr', '', 'en'])]);
+
+        $this->assertEquals(new Locales(['fr', 'en'], 'fr'), Locales::configured());
+    }
+
+    public function test_the_v0_3_0_code_to_name_form_still_reads_its_codes(): void
+    {
+        config(['seo.locales' => ['fr' => 'Français', 'en' => '']]);
+
+        $this->assertEquals(new Locales(['fr', 'en'], 'fr'), Locales::configured());
     }
 
     public function test_one_language_registers_no_middleware_and_no_switch_route(): void

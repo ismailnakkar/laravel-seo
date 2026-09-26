@@ -13,11 +13,16 @@ use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Contracts\Session\Middleware\AuthenticatesSessions;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Foundation\Application as FoundationApplication;
+use Illuminate\Foundation\Configuration\ApplicationBuilder;
+use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Foundation\Http\Kernel as HttpKernel;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Middleware\SubstituteBindings;
+use Illuminate\Routing\Middleware\ThrottleRequests;
+use Illuminate\Routing\Middleware\ValidateSignature;
 use Illuminate\Routing\Router;
 use Illuminate\Session\Middleware\AuthenticateSession;
 use Illuminate\Session\Middleware\StartSession;
@@ -32,7 +37,9 @@ use RuntimeException;
 use Seo\Http\ApplyLocale;
 use Seo\Http\ResolveLocale;
 use Seo\Tests\Fixtures\Admin;
+use Seo\Tests\Fixtures\AuthenticateSession as AppAuthenticateSession;
 use Seo\Tests\Fixtures\LocaleCode;
+use Seo\Tests\Fixtures\RequireRecentSignIn;
 use Seo\Tests\Fixtures\User;
 
 final class ResolveLocaleTest extends LanguagesTestCase
@@ -60,6 +67,7 @@ final class ResolveLocaleTest extends LanguagesTestCase
         $router->get('members', $locale)->middleware('auth')->name('members');
         $router->get('admin', $locale)->middleware('auth:admin');
         $router->get('limited', $locale)->middleware('throttle:1,1');
+        $router->get('recent', $locale)->middleware(RequireRecentSignIn::class);
         // Like cuty's login-as: the admin's session, the member for the rest of the request. Route::middleware()
         // only accepts middleware names, never a raw Closure (it casts every entry to string), so the swap happens
         // in the route's own action instead; ApplyLocale, in the `web` group, has already run by then either way.
@@ -85,6 +93,37 @@ final class ResolveLocaleTest extends LanguagesTestCase
         // types as int|string|false; the +1 needs the int cast to satisfy it.
         $this->assertSame((int)array_search(StartSession::class, $priority, true) + 1, array_search(ResolveLocale::class, $priority, true));
         $this->assertSame((int)array_search(AuthenticatesSessions::class, $priority, true) + 1, array_search(ApplyLocale::class, $priority, true));
+    }
+
+    /**
+     * cuty's bootstrap/app.php: its session check, a subclass it ranks by name, straight after `auth`, ApplyLocale after
+     * it as the README says, and its gates ahead of the throttles. Through the builder's own hook, which runs before any
+     * package's.
+     */
+    protected function sessionCheckRankedEarly(FoundationApplication $app): void
+    {
+        new ApplicationBuilder($app)->withMiddleware(static function (Middleware $middleware): void {
+            $middleware->appendToPriorityList(after: AuthenticatesRequests::class, append: AppAuthenticateSession::class);
+            $middleware->appendToPriorityList(after: AppAuthenticateSession::class, append: ApplyLocale::class);
+            $middleware->prependToPriorityList(before: ThrottleRequests::class, prepend: PreventRequestForgery::class);
+            $middleware->prependToPriorityList(before: ThrottleRequests::class, prepend: RequireRecentSignIn::class);
+            $middleware->prependToPriorityList(before: ThrottleRequests::class, prepend: ValidateSignature::class);
+            $middleware->web(append: AppAuthenticateSession::class);
+        });
+    }
+
+    #[DefineEnvironment('sessionCheckRankedEarly')]
+    public function test_an_app_ranking_the_account_after_its_early_session_check_has_its_gates_refuse_in_the_accounts_language(): void
+    {
+        $this->app->make(Kernel::class); // runs the app's hook, then the package's
+        $router = $this->app->make(Router::class);
+        $order = [ResolveLocale::class, AppAuthenticateSession::class, ApplyLocale::class, RequireRecentSignIn::class];
+        $this->assertSame($order, array_values(array_intersect($router->gatherRouteMiddleware($router->getRoutes()->match(Request::create('/recent'))), $order)));
+
+        $this->assertARevokedSessionWritesNothing();
+
+        $member = User::create(['name' => 'member', 'locale' => 'fr', 'password' => 'hash-now']);
+        $this->actingAs($member)->withSession([ResolveLocale::SESSION_KEY => 'es'])->get('/recent')->assertStatus(423)->assertContent('fr');
     }
 
     /** An app's own priority list without AuthenticateSession, set before any package's hook as the builder's is. */
@@ -125,6 +164,13 @@ final class ResolveLocaleTest extends LanguagesTestCase
         $this->withCookie($this->recallerName(), "{$member->id}|token|hash-before")->get('/');
 
         $this->assertGuestNextTime();
+    }
+
+    public function test_a_revoked_session_never_writes_the_account(): void
+    {
+        $this->withAuthenticateSession();
+
+        $this->assertARevokedSessionWritesNothing();
     }
 
     public function test_a_valid_remember_me_cookie_still_lands_on_the_accounts_language(): void
@@ -460,6 +506,19 @@ final class ResolveLocaleTest extends LanguagesTestCase
     public function test_a_prefixed_copy_is_never_redirected(): void
     {
         $this->withSession([ResolveLocale::SESSION_KEY => 'ar'])->get('/es')->assertOk()->assertContent('es');
+    }
+
+    /**
+     * Revoked by a password change elsewhere (logoutOtherDevices()): the session's hash is stale. Unlike a stale
+     * remember-me cookie, which newer guards refuse themselves, only AuthenticateSession catches it.
+     */
+    private function assertARevokedSessionWritesNothing(): void
+    {
+        $member = User::create(['name' => 'member', 'password' => 'hash-now']);
+
+        $this->actingAs($member)->withSession(['password_hash_web' => 'stale', ResolveLocale::SESSION_KEY => 'es'])->get('/plain');
+
+        $this->assertNull($member->fresh()?->locale);
     }
 
     private function withAuthenticateSession(): void

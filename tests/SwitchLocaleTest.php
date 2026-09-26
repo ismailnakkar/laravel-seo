@@ -348,10 +348,10 @@ final class SwitchLocaleTest extends LanguagesTestCase
         $this->get('/fr/terms');
 
         $this->assertEquals([
-            new Language('en', 'English', false),
-            new Language('fr', 'Français', true),
-            new Language('ar', 'العربية', false),
-            new Language('es', 'Español', false),
+            new Language('en', false),
+            new Language('fr', true),
+            new Language('ar', false),
+            new Language('es', false),
         ], $this->seo()->languages());
     }
 
@@ -394,6 +394,9 @@ final class SwitchLocaleTest extends LanguagesTestCase
     public function test_the_readme_switcher_renders(): void
     {
         $this->app->setLocale('fr');
+        $translator = $this->app->make('translator');
+        $translator->addLines(['languages.fr' => 'Français', 'languages.ar' => 'Arabe'], 'fr');
+        $translator->addLines(['languages.ar' => 'العربية'], 'ar');
 
         $html = Blade::render(<<<'BLADE'
             @inject('seo', \Seo\Seo::class)
@@ -401,7 +404,7 @@ final class SwitchLocaleTest extends LanguagesTestCase
                 @csrf
                 <input type="hidden" name="to" value="/fr/terms">
                 @foreach ($seo->languages() as $language)
-                    <button name="locale" value="{{ $language->code }}" lang="{{ $language->code }}" @if ($language->current) aria-current="true" @endif>{{ $language->name }}</button>
+                    <button name="locale" value="{{ $language->code }}" lang="{{ $language->code }}" @if ($language->current) aria-current="true" @endif>{{ __("languages.{$language->code}", locale: $language->code) }}</button>
                 @endforeach
             </form>
             BLADE);

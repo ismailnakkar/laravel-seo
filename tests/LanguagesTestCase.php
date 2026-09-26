@@ -23,7 +23,7 @@ abstract class LanguagesTestCase extends TestCase
     {
         parent::defineEnvironment($app);
 
-        $app['config']->set('seo.locales', ['en' => 'English', 'fr' => 'Français', 'ar' => 'العربية', 'es' => 'Español']);
+        $app['config']->set('seo.locales', ['en', 'fr', 'ar', 'es']);
         $app['config']->set('seo.user_locale', 'locale');
         $app['config']->set('seo.entry_redirect', ['home']);
         $app['config']->set('auth.providers.users.model', User::class);

@@ -108,7 +108,7 @@ class SeoServiceProvider extends ServiceProvider
         // mixed, not Closure: a v0.2 call, Locales first, gets this message instead of a TypeError.
         Router::macro('localized', function (mixed $routes): void {
             if (! $routes instanceof Closure) {
-                throw new LogicException("Route::localized() takes only the routes closure since v0.3: set the languages in config('seo.locales') as code => name, default first.");
+                throw new LogicException("Route::localized() takes only the routes closure since v0.3: set the languages in config('seo.locales') as a list of codes, default first.");
             }
 
             /** @var Router $this */

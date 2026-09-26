@@ -75,7 +75,7 @@ final class LocalizedRoutesTest extends TestCase
     #[DataProvider('misplacements')]
     public function test_it_throws_where_the_locale_would_not_be_the_first_path_segment(Closure $register): void
     {
-        config(['seo.locales' => ['en' => 'en', 'fr' => 'fr']]);
+        config(['seo.locales' => ['en', 'fr']]);
 
         $this->expectException(LogicException::class);
         $this->expectExceptionMessage('Route::localized() cannot sit inside a prefix group or another Route::localized()');
@@ -93,7 +93,7 @@ final class LocalizedRoutesTest extends TestCase
     #[DataProvider('routeLevelPrefixes')]
     public function test_it_throws_when_a_route_level_prefix_pushes_the_locale_off_the_first_segment(Closure $routes): void
     {
-        config(['seo.locales' => ['en' => 'en', 'fr' => 'fr']]);
+        config(['seo.locales' => ['en', 'fr']]);
 
         $this->expectException(LogicException::class);
         $this->expectExceptionMessage('Route::localized(): [admin/fr/x] puts the locale after a route-level prefix');
@@ -104,7 +104,7 @@ final class LocalizedRoutesTest extends TestCase
     public function test_a_v0_2_call_passing_locales_says_how_to_upgrade(): void
     {
         $this->expectException(LogicException::class);
-        $this->expectExceptionMessage("Route::localized() takes only the routes closure since v0.3: set the languages in config('seo.locales') as code => name, default first.");
+        $this->expectExceptionMessage("Route::localized() takes only the routes closure since v0.3: set the languages in config('seo.locales') as a list of codes, default first.");
 
         // @phpstan-ignore arguments.count (v0.2's call, on purpose)
         Route::localized(new Locales(['en', 'fr'], 'en'), static fn () => null);
@@ -112,7 +112,7 @@ final class LocalizedRoutesTest extends TestCase
 
     public function test_below_two_locales_the_routes_register_once_as_plain_routes(): void
     {
-        config(['seo.locales' => ['en' => 'English']]);
+        config(['seo.locales' => ['en']]);
 
         Route::localized(static fn () => Route::get('only', static fn () => app()->getLocale())->name('only'));
         Route::getRoutes()->refreshNameLookups();
@@ -186,7 +186,7 @@ final class LocalizedRoutesTest extends TestCase
     public function test_it_is_fine_inside_domain_name_and_middleware_groups(): void
     {
         $this->withSite();
-        config(['seo.locales' => ['en' => 'en', 'fr' => 'fr']]);
+        config(['seo.locales' => ['en', 'fr']]);
         Route::domain('localhost')->name('site.')->middleware('web')->group(static function (): void {
             Route::localized(static function (): void {
                 Route::get('terms', static fn () => app()->getLocale())->name('terms');
@@ -246,7 +246,7 @@ final class LocalizedRoutesTest extends TestCase
 
     public function test_every_copy_answers_to_the_routes_own_name(): void
     {
-        config(['seo.locales' => ['en' => 'en', 'fr' => 'fr']]);
+        config(['seo.locales' => ['en', 'fr']]);
         $answers = static fn (): array => [Route::currentRouteName(), Route::is('terms', 'site.about'), request()->routeIs('terms', 'site.about')];
         Route::name('site.')->middleware('web')->group(static fn () => Route::localized(static function () use ($answers): void {
             Route::get('about', $answers)->name('about');
@@ -325,7 +325,7 @@ final class LocalizedRoutesTest extends TestCase
             use Seo\Tests\Fixtures\LocalizedController;
 
             // route:cache runs in a subprocess with a fresh config: the codes are set here.
-            config(['seo.locales' => ['en' => 'en', 'fr' => 'fr', 'ar' => 'ar']]);
+            config(['seo.locales' => ['en', 'fr', 'ar']]);
 
             // First: the default {category}/{post} below would catch /fr/about.
             Route::middleware('web')->name('site.')->group(static function (): void {

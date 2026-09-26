@@ -129,12 +129,8 @@ class Seo
 
         /** @var Application $app */
         $app = Container::getInstance();
-        $names = (array)$app->make('config')->get('seo.locales');
 
-        return array_map(
-            static fn (string $code): Language => new Language($code, (string)$names[$code], $code === $app->getLocale()),
-            $locales->codes,
-        );
+        return array_map(static fn (string $code): Language => new Language($code, $code === $app->getLocale()), $locales->codes);
     }
 
     /**

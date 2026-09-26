@@ -48,8 +48,8 @@ return [
     // Serve /robots.txt, /sitemap.xml, /sitemap-{n}.xml and /indexnow-key.txt. false, null or '': your own routes serve them.
     'routes' => true,
 
-    // Languages, code => name in that language, e.g. ['en' => 'English', 'fr' => 'Français']. The first is the
-    // default: the bare URL and x-default. Fewer than two: Route::localized() registers plain routes, nothing else runs.
+    // Language codes, e.g. ['en', 'fr', 'zh-Hant']. The first is the default: the bare URL and x-default. Fewer than
+    // two: Route::localized() registers plain routes, nothing else runs.
     'locales' => [],
 
     // The signed-in user's attribute holding their language, which the package reads and saves. null: session only.
