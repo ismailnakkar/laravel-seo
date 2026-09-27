@@ -145,8 +145,9 @@ class SeoServiceProvider extends ServiceProvider
                 $this->group($marker($code) + ['prefix' => $code, 'as' => "seo.{$code}."], $routes);
             }
 
-            // /en/terms answers 301 to /terms: one redirect per GET page, taken from its first copy since the default's
-            // are not registered yet. A fallback gets none, so any other /en/… still 404s.
+            // The default's own prefix answers 301 to its copy (/en/terms → /terms, en the default): one redirect per
+            // GET page, taken from its first copy since the default's are not registered yet. A fallback gets none, so
+            // any other path under that prefix still 404s.
             foreach ($this->getRoutes()->getRoutes() as $copy) {
                 $localized = LocalizedRoute::of($copy);
 
@@ -167,7 +168,7 @@ class SeoServiceProvider extends ServiceProvider
             }
 
             // Default last: first match wins, and a default route opening with a parameter ({page}) would catch /fr/…
-            // and /en/…
+            // and the redirects under the default's own prefix.
             $this->group($marker($locales->default), $routes);
 
             // A route-level prefix (->prefix(), Route::prefix()->get()) lands before the group's; only the finished

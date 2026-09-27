@@ -46,8 +46,8 @@ final class ApplyLocale
 
         // Not a signed link, an <img>, or a sibling's fetch, which can also set Accept-Language.
         $pageView = self::opensThePage($request);
-        // A /en/… redirect opens the default copy: typed, it asks for that language, which an entry_redirect on the
-        // page it lands on must not then undo.
+        // A redirect off the default's own prefix (/en/…, en the default) opens the default copy: typed, it asks for
+        // that language, which an entry_redirect on the page it lands on must not then undo.
         $redirect = $request->route() instanceof Route ? $request->route()->getAction(RedirectToDefaultCopy::ACTION) : null;
         $opened = $pageView ? ($localized->locale ?? (is_string($redirect) ? $redirect : null)) : null;
 
