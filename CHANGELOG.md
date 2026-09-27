@@ -7,7 +7,16 @@ All notable changes to `ismailnakkar/laravel-seo` are listed here. The format fo
 While 0.x, a breaking change bumps the minor and a patch never breaks. Semver covers what the README documents;
 anything marked `@internal` may change in any release.
 
-## [0.4.0] - Unreleased
+## [0.4.1] - 2026-09-27
+
+### Added
+
+- `/en/terms`, with `en` the default language, answers a 301 to `/terms`, keeping the query string, and counts as
+  opening the English copy, so an `entry_redirect` page no longer sends the visitor back to another language. Only
+  `Route::localized()` GET pages redirect: any other `/en/…` path still 404s. A route of your own on `/en/…` wins
+  only when registered before `Route::localized()`.
+
+## [0.4.0] - 2026-09-27
 
 Every step from 0.3 is in [UPGRADE.md](UPGRADE.md#from-03-to-04).
 

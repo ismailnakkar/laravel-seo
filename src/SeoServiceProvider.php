@@ -28,6 +28,7 @@ use Seo\Console\IndexNowCommand;
 use Seo\Console\InstallCommand;
 use Seo\Http\ApplyLocale;
 use Seo\Http\NoindexHosts;
+use Seo\Http\RedirectToDefaultCopy;
 use Seo\Http\ResolveLocale;
 use Seo\View\Head;
 
@@ -127,14 +128,47 @@ class SeoServiceProvider extends ServiceProvider
                 throw new LogicException('Route::localized() cannot sit inside a prefix group or another Route::localized(): the locale must be the first path segment.');
             }
 
-            // Default last: first match wins, and a default route opening with a parameter ({page}) would catch /fr/…
-            foreach ([...array_diff($locales->codes, [$locales->default]), $locales->default] as $code) {
-                // A plain action key, not Route::metadata(): it survives group merging and route:cache on Laravel 12.
-                $group = [LocalizedRoute::ACTION => ['codes' => $locales->codes, 'default' => $locales->default, 'locale' => $code]];
+            // A plain action key, not Route::metadata(): it survives group merging and route:cache on Laravel 12.
+            $marker = static fn (string $code): array => [LocalizedRoute::ACTION => ['codes' => $locales->codes, 'default' => $locales->default, 'locale' => $code]];
+            $others = array_values(array_diff($locales->codes, [$locales->default]));
+            // Held, not counted: Laravel 13 lists domain routes first, so the new copies are not the list's tail. Holding
+            // them also keeps their object ids from being reused.
+            $before = $this->getRoutes()->getRoutes();
+            $seen = array_flip(array_map(spl_object_id(...), $before));
+            // Keyed by domain and URI: an app's own GET on a redirect's URI stays, where adding the redirect would
+            // replace it.
+            $taken = $this->getRoutes()->get('GET');
+
+            foreach ($others as $code) {
                 // Name-prefixed copies: route:cache throws on duplicate names, but tolerates an unnamed route's
                 // bare `seo.{code}.`.
-                $this->group($code === $locales->default ? $group : $group + ['prefix' => $code, 'as' => "seo.{$code}."], $routes);
+                $this->group($marker($code) + ['prefix' => $code, 'as' => "seo.{$code}."], $routes);
             }
+
+            // /en/terms answers 301 to /terms: one redirect per GET page, taken from its first copy since the default's
+            // are not registered yet. A fallback gets none, so any other /en/… still 404s.
+            foreach ($this->getRoutes()->getRoutes() as $copy) {
+                $localized = LocalizedRoute::of($copy);
+
+                if (isset($seen[spl_object_id($copy)]) || $localized?->locale !== $others[0] || $copy->isFallback || ! in_array('GET', $copy->methods(), true)) {
+                    continue;
+                }
+
+                $uri = rtrim("{$locales->default}/{$localized->unprefixedUri($copy)}", '/');
+
+                if (isset($taken[$copy->getDomain() . $uri])) {
+                    continue;
+                }
+
+                // The domain in the action, not ->domain() after: the collection files a route by domain as it adds
+                // it. A leading backslash, as Route::redirect() has: a `namespace` group would otherwise prefix the class.
+                $this->get($uri, ['uses' => '\\' . RedirectToDefaultCopy::class, RedirectToDefaultCopy::ACTION => $locales->default] + array_filter(['domain' => $copy->getDomain()]))
+                    ->where($copy->wheres);
+            }
+
+            // Default last: first match wins, and a default route opening with a parameter ({page}) would catch /fr/…
+            // and /en/…
+            $this->group($marker($locales->default), $routes);
 
             // A route-level prefix (->prefix(), Route::prefix()->get()) lands before the group's; only the finished
             // URIs show it.

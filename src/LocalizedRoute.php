@@ -33,23 +33,30 @@ final readonly class LocalizedRoute
      */
     public function path(string $path, string $code): string
     {
-        $base = $path;
-
-        if ($this->locale !== $this->locales->default) {
-            // The router matches the decoded path (/%66r/terms, /fr%2Fterms): strip the prefix as it decodes,
-            // keep the rest as spelt.
-            preg_match('~^(?:%[0-9A-Fa-f]{2}|.){' . (strlen($this->locale) + 1) . '}~s', $path, $prefix);
-            $rest = (string)preg_replace('~^%2F~i', '/', substr($path, strlen($prefix[0] ?? '')));
-
-            if (rawurldecode($prefix[0] ?? '') !== '/' . $this->locale || ! in_array(substr($rest, 0, 1), ['', '/'], true)) {
-                throw new LogicException("[{$path}] is not a path of the {$this->locale} copy.");
-            }
-
-            $base = $rest ?: '/';
-        }
+        $base = $this->locale === $this->locales->default ? $path : self::withoutPrefix($path, $this->locale);
 
         // One leading slash: a catch-all's `/fr//host` would otherwise leave `//host`, which a browser reads as a host.
         return $code === $this->locales->default ? '/' . ltrim($base, '/') : '/' . $code . rtrim($base, '/');
+    }
+
+    /**
+     * @internal $path without its `/$code` segment: ('/%66r%2Fterms', 'fr') → '/terms'; ('/fr', 'fr') → '/'. May keep
+     * a leading `//`.
+     *
+     * @throws LogicException $path does not open with that segment
+     */
+    public static function withoutPrefix(string $path, string $code): string
+    {
+        // The router matches the decoded path (/%66r/terms, /fr%2Fterms): strip the prefix as it decodes, keep the rest
+        // as spelt.
+        preg_match('~^(?:%[0-9A-Fa-f]{2}|.){' . (strlen($code) + 1) . '}~s', $path, $prefix);
+        $rest = (string)preg_replace('~^%2F~i', '/', substr($path, strlen($prefix[0] ?? '')));
+
+        if (rawurldecode($prefix[0] ?? '') !== '/' . $code || ! in_array(substr($rest, 0, 1), ['', '/'], true)) {
+            throw new LogicException("[{$path}] is not a path of the {$code} copy.");
+        }
+
+        return $rest ?: '/';
     }
 
     /**

@@ -164,9 +164,47 @@ final class LocalizedRoutesTest extends TestCase
             $this->get($url)->assertOk()->assertContent($content);
         }
 
+        // Nor the default's prefix: /en is no {page}. The fallback gets no redirect.
+        $this->get('/en')->assertStatus(301)->assertHeader('Location', 'http://localhost');
+        $this->get('/en/about')->assertStatus(301)->assertHeader('Location', 'http://localhost/about');
+        $this->get('/en/a/b/c')->assertOk()->assertContent('fallback:en');
+
         // The sitemap matches a loc the same way.
         $this->withSitemap(['/fr']);
         $this->assertSame(['http://localhost/', 'http://localhost/fr'], array_column(iterator_to_array($this->seo()->sitemap(), false), 'loc'));
+    }
+
+    public function test_the_defaults_prefix_answers_301_to_each_pages_default_copy(): void
+    {
+        $this->withLocalizedRoutes(['en', 'fr', 'ar'], static function (): void {
+            Route::get('/', static fn () => 'home');
+            Route::get('posts/{post}', static fn (string $post) => $post)->where('post', '[0-9]+');
+            Route::post('contact', static fn () => 'sent');
+        });
+
+        foreach ([
+            '/en'                 => 'http://localhost',
+            '/en/posts/7?b=2&a=1' => 'http://localhost/posts/7?b=2&a=1',
+            // The router matches the decoded path.
+            '/%65n/posts/7' => 'http://localhost/posts/7',
+            '/en%2Fposts/7' => 'http://localhost/posts/7',
+        ] as $url => $location) {
+            $this->get($url)->assertStatus(301)->assertHeader('Location', $location);
+        }
+
+        // Only a GET page redirects, within its constraints.
+        $this->get('/en/posts/x')->assertNotFound();
+        $this->get('/en/nope')->assertNotFound();
+        $this->post('/en/contact')->assertNotFound();
+    }
+
+    public function test_the_defaults_prefix_never_redirects_to_a_path_a_browser_reads_as_another_host(): void
+    {
+        $this->withLocalizedRoutes(['en', 'fr'], static function (): void {
+            Route::get('{path}', static fn (string $path) => $path)->where('path', '.*');
+        });
+
+        $this->get('/en//evil.test/x')->assertStatus(301)->assertHeader('Location', 'http://localhost/evil.test/x');
     }
 
     public function test_bindings_resolve_under_the_urls_locale(): void
@@ -198,6 +236,23 @@ final class LocalizedRoutesTest extends TestCase
         $this->assertSame('localhost', Route::getRoutes()->getByName('site.seo.fr.terms')->getDomain());
         $this->get('/fr/terms')->assertOk()->assertContent('fr');
         $this->get('http://go.test/fr/terms')->assertNotFound();
+        $this->get('/en/terms')->assertStatus(301)->assertHeader('Location', 'http://localhost/terms');
+        $this->get('http://go.test/en/terms')->assertNotFound();
+    }
+
+    public function test_each_domains_page_gets_its_own_redirect_and_an_apps_own_route_on_its_uri_stays(): void
+    {
+        Route::get('en/legacy', static fn () => 'legacy')->name('legacy');
+        $this->withLocalizedRoutes(['en', 'fr'], static function (): void {
+            Route::domain('a.test')->group(static fn () => Route::get('terms', static fn () => 'a'));
+            Route::domain('b.test')->group(static fn () => Route::get('terms', static fn () => 'b'));
+            Route::get('legacy', static fn () => 'page');
+        });
+
+        $this->get('http://a.test/en/terms')->assertStatus(301)->assertHeader('Location', 'http://a.test/terms');
+        $this->get('http://b.test/en/terms')->assertStatus(301)->assertHeader('Location', 'http://b.test/terms');
+        $this->get('/en/legacy')->assertOk()->assertContent('legacy');
+        $this->assertTrue(Route::has('legacy'));
     }
 
     public function test_a_copy_receives_its_route_parameters_and_no_locale(): void
@@ -354,6 +409,7 @@ final class LocalizedRoutesTest extends TestCase
 
         $this->get('/ar/two')->assertOk()->assertContent('two');
         $this->get('/fr/about')->assertOk()->assertContent('site.about');
+        $this->get('/en/terms?a=1')->assertStatus(301)->assertHeader('Location', 'http://localhost/terms?a=1');
 
         // route:cache names every unnamed route: the copy's generated name drops seo.ar. as the default's never had it.
         foreach (['/one', '/ar/one'] as $path) {

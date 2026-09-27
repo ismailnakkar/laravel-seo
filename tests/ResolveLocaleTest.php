@@ -731,6 +731,21 @@ final class ResolveLocaleTest extends LanguagesTestCase
         $this->withHeaders(['Accept-Language' => 'fr', ...$headers])->get('/')->assertRedirect('/fr');
     }
 
+    public function test_typing_the_defaults_prefix_opens_the_default_copy_and_the_entry_redirect_leaves_it(): void
+    {
+        $arrival = ['Accept-Language' => 'fr', 'Sec-Fetch-Site' => 'none', 'Sec-Fetch-Dest' => 'document'];
+
+        $this->withHeaders($arrival)->get('/en')->assertStatus(301)->assertHeader('Location', 'http://localhost')
+            ->assertHeader('Cache-Control', 'no-cache, private');
+        $this->assertSame('en', session(ResolveLocale::SESSION_KEY));
+        $this->withHeaders($arrival)->get('/')->assertOk()->assertContent('en');
+
+        // Embedded by another site, it records nothing.
+        $this->flushSession();
+        $this->withHeaders(['Sec-Fetch-Site' => 'cross-site', 'Sec-Fetch-Dest' => 'image'])->get('/en/terms')->assertStatus(301);
+        $this->assertNull(session(ResolveLocale::SESSION_KEY));
+    }
+
     public function test_a_prefixed_copy_is_never_redirected(): void
     {
         $this->withSession([ResolveLocale::SESSION_KEY => 'ar'])->get('/es')->assertOk()->assertContent('es');

@@ -261,6 +261,8 @@ pages, renders the visitor's language, chosen as [below](#how-the-language-is-ch
 - Call `Route::localized()` outside any prefix group, before catch-all and fallback routes. Inside, prefix with
   `Route::prefix()->group()`, never a route-level `->prefix()`.
 - Put in only pages whose content is translated, plus their forms' POST routes.
+- `/en/terms`, with `en` the default, answers a 301 to `/terms` and counts as opening it. Any other `/en/…` path
+  still 404s. A route of your own on `/en/…` must come before `Route::localized()`.
 - Link with `route()`: `url()` and hard-coded paths go to the default copy, so a click on one switches the visitor to
   the default language.
 - On `/fr/terms`, `Route::currentRouteName()`, `Route::is()` and `routeIs()` see `terms`. `route:list` still shows
