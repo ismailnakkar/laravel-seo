@@ -26,11 +26,15 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 /**
  * POST /locale: saves the visitor's language and returns them to `to` in it. A signed `to` is signed again only while
  * its own signature is valid, so nothing unsigned ever is.
+ *
+ * @internal The route, seo.locale, is the API.
  */
 final class SwitchLocale
 {
     public function __invoke(Request $request, Application $app, Router $router, UrlGenerator $url): RedirectResponse
     {
+        // A route:cache built while remember_locale was on still routes here.
+        abort_if($app->make('config')->get('seo.remember_locale') === false, 404);
         $locales = Locales::configured() ?? throw new NotFoundHttpException;
         $code = (string)$request->validate(['locale' => ['required', 'string', Rule::in($locales->codes)]])['locale'];
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Seo;
 
+/** @internal How Site::roleOf() treats a host. */
 enum HostRole: string
 {
     /** The Site::$url host: rules plus the Sitemap line. */

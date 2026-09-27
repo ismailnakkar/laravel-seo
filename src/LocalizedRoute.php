@@ -14,6 +14,7 @@ final readonly class LocalizedRoute
     /** @internal Route-action key. Its value stays a plain array so route:cache can var_export it. */
     public const string ACTION = 'seo_locale';
 
+    /** @internal Built by of(); the $locales property is internal too. */
     public function __construct(public Locales $locales, public string $locale) {}
 
     /** null outside Route::localized() */
@@ -54,6 +55,8 @@ final readonly class LocalizedRoute
     /**
      * $route's own name, as its default copy has it: `seo.{locale}.` stripped on a non-default copy, never touched
      * on the default (the package never prefixes it). null once that leaves nothing: an unnamed route.
+     *
+     * @internal
      */
     public function name(Route $route): ?string
     {
@@ -66,7 +69,7 @@ final readonly class LocalizedRoute
         return $name === '' ? null : $name;
     }
 
-    /** $route's URI with this copy's own locale segment gone, trimmed of '/': the shape every copy shares. */
+    /** @internal $route's URI with this copy's own locale segment gone, trimmed of '/': the shape every copy shares. */
     public function unprefixedUri(Route $route): string
     {
         $uri = trim($route->uri(), '/');

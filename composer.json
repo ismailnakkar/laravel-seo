@@ -1,12 +1,15 @@
 {
     "name": "ismailnakkar/laravel-seo",
-    "description": "Head tags, robots.txt, sitemaps and IndexNow for Laravel, with crawlability test helpers and a live check.",
+    "description": "Head tags, robots.txt, sitemaps and IndexNow for Laravel, plus multilingual localization with localized routes and hreflang, crawlability test helpers and a live check.",
     "keywords": [
         "laravel",
         "seo",
         "robots",
         "sitemap",
-        "indexnow"
+        "indexnow",
+        "localization",
+        "multilingual",
+        "hreflang"
     ],
     "homepage": "https://github.com/ismailnakkar/laravel-seo",
     "license": "MIT",

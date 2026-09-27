@@ -4,16 +4,20 @@ declare(strict_types=1);
 
 namespace Seo\Http;
 
+use Illuminate\Container\Container;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Seo\HostRole;
+use Seo\Memo;
 use Seo\Seo;
 use Throwable;
 
 /**
  * routes/seo.php's files. Cache headers are set here on success only: SetCacheHeaders route middleware would also make
  * the fail-open robots.txt publicly cacheable.
+ *
+ * @internal
  */
 final class SeoController
 {
@@ -31,8 +35,8 @@ final class SeoController
             $body = $site->robotsTxt($site->roleOf($request->getHost()), $seo->sitemapUrl($site));
         } catch (Throwable $e) {
             // A 5xx robots.txt means disallow-all (RFC 9309) and Google stops crawling for 12 hours. Serve allow-all,
-            // uncached, so the real policy returns once fixed; rescue() because report() throws when logging fails.
-            rescue(static fn () => report($e), report: false);
+            // uncached, so the real policy returns once fixed.
+            Container::getInstance()->make(Memo::class)->report($e);
 
             return new Response(self::FALLBACK, 200, ['Content-Type' => self::TEXT, 'Cache-Control' => 'no-store']);
         }

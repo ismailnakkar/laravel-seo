@@ -15,10 +15,11 @@ use Seo\UserLocale;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * The signed-in user's side of the language and the entry redirect: the account's code beats the visitor's choice,
- * and opening a Route::localized() copy makes its language the choice, in the session and the account. In `web`
- * straight after AuthenticateSession when two or more locales are configured: the user is only safe to read, and the
- * request to answer, once that has checked the session.
+ * The signed-in user's side of the language, and the entry redirect. Off a copy: the language the visitor browses (the
+ * session, set by opening a Route::localized() copy in another language), else the account's, the browser's, the
+ * default. Only the switcher changes an account's language; an account without one takes the visitor's on a page view,
+ * once. In `web` straight after AuthenticateSession when two or more locales are configured: the user is only safe to
+ * read, and the request to answer, once that has checked the session.
  */
 final class ApplyLocale
 {
@@ -35,7 +36,7 @@ final class ApplyLocale
         $localized = LocalizedRoute::of($request->route());
         $user = $request->user();
         $account = UserLocale::of($user, $locales);
-        $choice = $account ?? ResolveLocale::choice($request, $locales, $localized);
+        $choice = ResolveLocale::choice($request, $locales, $account);
         $target = $this->entryTarget($request, $locales, $localized, $choice);
 
         // Before anything is saved: an arrival on the default copy would otherwise save the default over the choice.
@@ -43,39 +44,25 @@ final class ApplyLocale
             return redirect()->to($target);
         }
 
-        $page = $localized->locale ?? $choice;
-        // null off a copy, or when this request is not the visitor opening it (a signed link, an <img> of it).
-        $opened = self::opensThePage($request) ? $localized?->locale : null;
-        $saved = $opened ?? $choice;
+        // Not a signed link, an <img>, or a sibling's fetch, which can also set Accept-Language.
+        $pageView = self::opensThePage($request);
+        $opened = $pageView ? $localized?->locale : null;
 
-        if ($request->hasSession()) {
-            $request->session()->put(ResolveLocale::SESSION_KEY, $saved);
+        // Only a change: `auth` sends a new device to the login copy in the browser's language, which must not then
+        // outrank the account.
+        if ($opened !== null && $opened !== $choice && $request->hasSession()) {
+            $request->session()->put(ResolveLocale::SESSION_KEY, $opened);
         }
 
-        // Only on a change, never every page view: an empty account, or a copy in another language.
-        if ($user !== null && $account !== $saved) {
-            rescue(static fn () => UserLocale::save($user, $saved));
+        // Checked on the row the guard loaded, so a page view costs no query. A user signed in by this request is filled
+        // on their next one. Only on a GET: a POST /locale saves the choice itself, which is one write.
+        if ($pageView && $request->isMethod('GET') && $account === null && UserLocale::hasColumn($user)) {
+            rescue(static fn () => UserLocale::save($user, $opened ?? $choice, unlessSet: $locales));
         }
 
-        $this->app->setLocale($page);
+        $this->app->setLocale($localized->locale ?? $choice);
 
-        $response = $next($request);
-
-        // Signed in during this request (a sign-up, a sign-in): a copy opened replaces the account's language, and
-        // anything else only fills an empty one, as the guest's choice never beats the account. The browser's copy is
-        // no choice: `auth` sends a new device's guest to route('login') in it. The user before $next counts, so an
-        // admin impersonating a member later in the stack never writes theirs.
-        if ($user === null && ($signedIn = $request->user()) !== null) {
-            $account = UserLocale::of($signedIn, $locales);
-            $chosen = $opened === ($locales->preferredBy($request) ?? $locales->default) ? null : $opened;
-            $code = $chosen ?? $account ?? $saved;
-
-            if ($account !== $code) {
-                rescue(static fn () => UserLocale::save($signedIn, $code));
-            }
-        }
-
-        return $response;
+        return $next($request);
     }
 
     /** The choice's copy of an entry_redirect page, for a visitor arriving from outside the site; null to render. */
@@ -103,21 +90,22 @@ final class ApplyLocale
     }
 
     /**
-     * @internal Never a signed link: its sender chose its language, as for the entry redirect. From another site only a
-     * top-level GET: a SameSite=None session cookie also follows an <img>, iframe or fetch from any site, and an app
-     * may rank its CSRF check after this, so a forged POST is refused too late. From this site a page load or the app's
-     * own fetch (Inertia, wire:navigate), never an <img> or iframe, which user content on the site could point at a
-     * copy. No Sec-Fetch-Dest: a browser without Fetch Metadata. Never a Livewire component update: its persistent
-     * middleware replays the page's route with /livewire/update's query, so a signed page would lose its signature.
+     * Never a signed link: its sender chose its language, as for the entry redirect. From another origin, a sibling
+     * subdomain included, only a top-level GET: a session cookie also follows an <img>, iframe or fetch from a sibling
+     * (from any site when SameSite=None), and an app may rank its CSRF check after this, so a forged POST is refused
+     * too late. From this origin a page load or the app's own fetch (Inertia, wire:navigate), never an <img> or iframe,
+     * which user content on the site could point at a copy. No Fetch Metadata: an older browser, trusted as this
+     * origin. Never a Livewire component update: its persistent middleware replays the page's route with
+     * /livewire/update's query, so a signed page would lose its signature.
      */
-    public static function opensThePage(Request $request): bool
+    private static function opensThePage(Request $request): bool
     {
         $dest = $request->headers->get('Sec-Fetch-Dest');
 
         return ! $request->query->has('signature') && ! $request->headers->has('X-Livewire')
-            && ($request->headers->get('Sec-Fetch-Site') === 'cross-site'
-            ? $request->isMethod('GET') && $dest === 'document'
-            : in_array($dest, [null, 'document', 'empty'], true));
+            && (in_array($request->headers->get('Sec-Fetch-Site'), [null, 'same-origin'], true)
+            ? in_array($dest, [null, 'document', 'empty'], true)
+            : $request->isMethod('GET') && $dest === 'document');
     }
 
     /** Sec-Fetch-Site, or where a browser sends none (Safari before 16.4, plain HTTP), a Referer on this host. */

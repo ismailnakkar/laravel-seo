@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Seo\Http;
 
 use Closure;
+use Illuminate\Container\Container;
 use Illuminate\Http\Request;
 use Seo\HostRole;
+use Seo\Memo;
 use Seo\Seo;
 use Symfony\Component\HttpFoundation\Response;
 use Throwable;
@@ -26,7 +28,7 @@ final class NoindexHosts
         try {
             $noindex = $this->seo->site($request)->roleOf($request->getHost()) === HostRole::noindex;
         } catch (Throwable $e) {
-            rescue(static fn () => report($e), report: false);
+            Container::getInstance()->make(Memo::class)->report($e);
 
             return $response;
         }

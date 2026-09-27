@@ -8,6 +8,7 @@ use Illuminate\Console\Command;
 use Illuminate\Filesystem\Filesystem;
 use Symfony\Component\Console\Attribute\AsCommand;
 
+/** @internal The command is the API: seo:install. */
 #[AsCommand(name: 'seo:install', description: 'Publish config/seo.php and delete the public/ files that would hide the package routes')]
 final class InstallCommand extends Command
 {

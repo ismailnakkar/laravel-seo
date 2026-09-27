@@ -44,8 +44,8 @@ class SeoServiceProvider extends ServiceProvider
         // within a scope.
         $this->app->scoped(Memo::class);
 
-        // Set on match: SubstituteBindings binds a translated slug under it, and a localized route outside `web` still
-        // gets its locale. In register(), so providers' boot-time listeners (an error tracker) see the locale and name.
+        // Set on match, before any route middleware: a localized route outside `web`, or with remember_locale off, gets
+        // its locale too. In register(), so providers' boot-time listeners (an error tracker) see the locale and name.
         $this->app->make(Router::class)->matched(static function (RouteMatched $event): void {
             if (($localized = LocalizedRoute::of($event->route)) === null) {
                 return;
@@ -80,7 +80,7 @@ class SeoServiceProvider extends ServiceProvider
         // Global, so a noindex host's redirects, 404s and files carry the header too. Skipped when already listed.
         $this->callAfterResolving(Kernel::class, static fn (HttpKernel $kernel) => $kernel->pushMiddleware(NoindexHosts::class));
 
-        if (Locales::configured() !== null) {
+        if (Locales::configured() !== null && $this->app->make('config')->get('seo.remember_locale') !== false) {
             // ResolveLocale straight after StartSession: CSRF, signature, throttle and auth refusals then speak the
             // visitor's language. ApplyLocale, which reads the user and can answer, straight after AuthenticateSession;
             // a priority list without it (an app's own priority()) ranks ApplyLocale last, after every listed check.

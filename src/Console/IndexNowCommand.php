@@ -14,6 +14,7 @@ use Seo\Http\SeoController;
 use Seo\Seo;
 use Symfony\Component\Console\Attribute\AsCommand;
 
+/** @internal The command is the API: seo:indexnow. */
 #[AsCommand(name: 'seo:indexnow')]
 final class IndexNowCommand extends Command
 {

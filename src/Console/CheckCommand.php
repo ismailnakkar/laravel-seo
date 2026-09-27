@@ -26,6 +26,7 @@ use Seo\Testing\RobotsMatcher;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Output\OutputInterface;
 
+/** @internal The command is the API: seo:check. */
 #[AsCommand(name: 'seo:check')]
 final class CheckCommand extends Command
 {
@@ -145,19 +146,30 @@ final class CheckCommand extends Command
 
         $config = $this->laravel->make('config');
         $routes = $this->laravel->make(Router::class)->getRoutes();
+        $off = $config->get('seo.remember_locale') === false;
+        $names = (array)$config->get('seo.entry_redirect');
+        $column = $config->get('seo.user_locale');
+        $column = is_string($column) && $column !== '' ? $column : null;
+
+        if ($names === [] && $column === null) {
+            return;
+        }
+
         $this->write('languages');
 
-        foreach ((array)$config->get('seo.entry_redirect') as $name) {
+        if ($off && $names !== []) {
+            $this->row('entry_redirect', 'WARN', 'ignored while remember_locale is false');
+        }
+
+        foreach ($off ? [] : $names as $name) {
             $name = is_scalar($name) ? (string)$name : get_debug_type($name);
             $localized = LocalizedRoute::of($routes->getByName($name));
             $isDefaultCopy = $localized !== null && $localized->locale === $localized->locales->default;
             $this->row('entry_redirect', $isDefaultCopy ? 'PASS' : 'FAIL', $isDefaultCopy ? $name : "[{$name}] is not the name of a Route::localized() route");
         }
 
-        $column = $config->get('seo.user_locale');
-
-        if (is_string($column) && $column !== '') {
-            $this->row('user_locale', ...self::userColumn($config, $column));
+        if ($column !== null) {
+            $this->row('user_locale', ...($off ? ['WARN', 'ignored while remember_locale is false'] : self::userColumn($config, $column)));
         }
 
         $this->write();

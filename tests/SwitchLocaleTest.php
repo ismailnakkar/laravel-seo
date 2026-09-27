@@ -18,11 +18,34 @@ use Seo\Tests\Fixtures\User;
 
 final class SwitchLocaleTest extends LanguagesTestCase
 {
+    /** The README's account-language prompt, as written there. */
+    private const string MODAL = <<<'BLADE'
+        @inject('seo', \Seo\Seo::class)
+        @if ($offer = $seo->accountLanguageOffer())
+            <dialog id="account-language" data-code="{{ $offer->code }}">
+                <form method="POST" action="{{ route('seo.locale') }}">
+                    @csrf
+                    <input type="hidden" name="to" value="{{ request()->getRequestUri() }}">
+                    <p>{{ __('Use this language for your account too?') }}</p>
+                    <button name="locale" value="{{ $offer->code }}">{{ __('Yes') }}</button>
+                    <button formmethod="dialog">{{ __('Not now') }}</button>
+                </form>
+            </dialog>
+            <script type="module">
+                const dialog = document.getElementById('account-language');
+                const declined = `account-language-declined-${dialog.dataset.code}`;
+                dialog.addEventListener('close', () => sessionStorage.setItem(declined, '1'));
+                if (! sessionStorage.getItem(declined)) dialog.showModal();
+            </script>
+        @endif
+        BLADE;
+
     protected function defineWebRoutes($router): void
     {
         $locale = static fn (): string => app()->getLocale();
 
         $router->get('plain', $locale);
+        $router->get('modal', static fn (): string => Blade::render(self::MODAL));
         $router->get('plain-signed/{user}', $locale)->middleware('signed')->name('plain.signed');
         $router->localized(static function (Router $router) use ($locale): void {
             $router->get('/', $locale)->name('home');
@@ -70,6 +93,18 @@ final class SwitchLocaleTest extends LanguagesTestCase
         $this->get('/plain')->assertContent('fr');
     }
 
+    public function test_a_cached_route_refuses_once_the_locale_is_not_remembered(): void
+    {
+        $user = User::create(['name' => 'member', 'locale' => 'en']);
+        // The route is registered at boot; a route:cache built while remember_locale was on keeps it after that.
+        config(['seo.remember_locale' => false]);
+
+        $this->actingAs($user)->post('/locale', ['locale' => 'fr', 'to' => '/plain'])->assertNotFound();
+
+        $this->assertNull(session(ResolveLocale::SESSION_KEY));
+        $this->assertSame('en', $user->fresh()?->locale);
+    }
+
     public function test_the_account_is_saved_through_the_closure(): void
     {
         $user = User::create(['name' => 'member', 'locale' => 'en']);
@@ -83,6 +118,19 @@ final class SwitchLocaleTest extends LanguagesTestCase
         $this->assertSame([[$user, 'fr']], $calls);
         $this->assertSame('en', $user->fresh()?->locale);
         $this->assertSame('fr', $user->locale);
+    }
+
+    public function test_an_empty_account_is_saved_once_with_the_choice(): void
+    {
+        $user = User::create(['name' => 'member', 'locale' => null]);
+        $codes = [];
+        $this->seo()->saveUserLocaleUsing(static function (User $model, string $code) use (&$codes): void {
+            $codes[] = $code;
+        });
+
+        $this->actingAs($user)->post('/locale', ['locale' => 'fr', 'to' => '/plain'], ['Accept-Language' => 'es'])->assertStatus(303);
+
+        $this->assertSame(['fr'], $codes);
     }
 
     /** @return iterable<string, array{string, string, string}> to, locale, Location */
@@ -412,5 +460,48 @@ final class SwitchLocaleTest extends LanguagesTestCase
         $this->assertStringContainsString('action="http://localhost/locale"', $html);
         $this->assertMatchesRegularExpression('~value="fr" lang="fr"\s+aria-current="true"\s*>Français</button>~', $html);
         $this->assertMatchesRegularExpression('~value="ar" lang="ar"\s*>العربية</button>~', $html);
+    }
+
+    public function test_the_readme_modal_offers_the_language_on_screen_to_the_account_until_it_is_saved(): void
+    {
+        $member = User::create(['name' => 'member', 'locale' => 'ar']);
+
+        $this->actingAs($member)->get('/modal')->assertOk()->assertDontSee('<dialog', false);
+        $this->get('/fr/terms');
+        $this->get('/modal')->assertOk()
+            ->assertSee('action="http://localhost/locale"', false)
+            ->assertSee('<input type="hidden" name="to" value="/modal">', false)
+            ->assertSee('<button name="locale" value="fr">Yes</button>', false);
+
+        $this->post('/locale', ['locale' => 'fr', 'to' => '/modal'])->assertRedirect('/modal');
+
+        $this->get('/modal')->assertOk()->assertDontSee('<dialog', false);
+        $this->assertSame('fr', $member->fresh()?->locale);
+        $this->assertStringContainsString(self::MODAL, (string)file_get_contents(__DIR__ . '/../README.md'));
+    }
+
+    /** @return iterable<string, array{?string, string, ?string}> the account's language, the one on screen, the offer */
+    public static function offers(): iterable
+    {
+        yield 'another language on screen' => ['ar', 'fr', 'fr'];
+        yield "the account's language on screen" => ['ar', 'ar', null];
+        yield 'an account without one' => [null, 'fr', null];
+        yield 'a language not configured on screen' => ['ar', 'de', null];
+    }
+
+    #[DataProvider('offers')]
+    public function test_the_account_language_offer(?string $account, string $screen, ?string $offer): void
+    {
+        $this->actingAs(User::create(['name' => 'member', 'locale' => $account]));
+        $this->app->setLocale($screen);
+
+        $this->assertEquals($offer === null ? null : new Language($offer, true), $this->seo()->accountLanguageOffer());
+    }
+
+    public function test_a_guest_gets_no_account_language_offer(): void
+    {
+        $this->get('/fr/terms');
+
+        $this->assertNull($this->seo()->accountLanguageOffer());
     }
 }

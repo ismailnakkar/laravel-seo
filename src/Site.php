@@ -88,6 +88,8 @@ final readonly class Site
     /**
      * Index host first, so a noindex entry naming it (a misconfigured env value) cannot noindex the site. A request
      * host may keep an FQDN's trailing dot (`dl.test.`).
+     *
+     * @internal
      */
     public function roleOf(string $host): HostRole
     {
@@ -114,7 +116,11 @@ final readonly class Site
         };
     }
 
-    /** Page::$canonical on $url; otherwise the request path on $url, keeping only ?page=N (N > 1) if paginated. */
+    /**
+     * Page::$canonical on $url; otherwise the request path on $url, keeping only ?page=N (N > 1) if paginated.
+     *
+     * @internal
+     */
     public function canonical(Request $request, ?Page $page = null): string
     {
         if ($page?->canonical !== null) {
@@ -129,6 +135,8 @@ final readonly class Site
     /**
      * @return array<string, string> hreflang => href in codes order, x-default last; [] outside Route::localized() or
      *                               with a canonical override
+     *
+     * @internal
      */
     public function alternates(Request $request, ?Page $page = null): array
     {
@@ -148,7 +156,12 @@ final readonly class Site
         return $alternates + ['x-default' => $alternates[$localized->locales->default]];
     }
 
-    /** No agent is ever named: a named group replaces `*` for it (RFC 9309 §2.2.1). Sitemap line on HostRole::index with a URL only. */
+    /**
+     * No agent is ever named: a named group replaces `*` for it (RFC 9309 §2.2.1). Sitemap line on HostRole::index
+     * with a URL only.
+     *
+     * @internal
+     */
     public function robotsTxt(HostRole $role, ?string $sitemapUrl): string
     {
         // An empty Disallow allows everything.
@@ -158,7 +171,7 @@ final readonly class Site
         return implode("\n", $role === HostRole::index && $sitemapUrl !== null ? [...$lines, '', "Sitemap: {$sitemapUrl}"] : $lines) . "\n";
     }
 
-    /** Index host, path '' or '/', any query. */
+    /** @internal Index host, path '' or '/', any query. */
     public function isHome(string $url): bool
     {
         $parts = parse_url($url);

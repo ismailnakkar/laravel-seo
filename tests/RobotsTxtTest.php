@@ -209,6 +209,8 @@ final class RobotsTxtTest extends TestCase
         }
 
         Exceptions::assertReported(static fn (RuntimeException $e): bool => $e->getMessage() === 'settings are down');
+        // Once per request, though NoindexHosts catches it too.
+        Exceptions::assertReportedCount(2);
     }
 
     public function test_the_fallback_is_served_when_the_log_channel_cannot_write_either(): void

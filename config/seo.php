@@ -52,6 +52,9 @@ return [
     // two: Route::localized() registers plain routes, nothing else runs.
     'locales' => [],
 
+    // false: only a copy's URL sets the language; no session, account, POST /locale or entry redirect.
+    'remember_locale' => true,
+
     // The signed-in user's attribute holding their language, which the package reads and saves. null: session only.
     'user_locale' => null,
 

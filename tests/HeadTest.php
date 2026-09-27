@@ -10,17 +10,21 @@ use Illuminate\Foundation\Http\Events\RequestHandled;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\View;
 use Illuminate\View\ComponentAttributeBag;
 use Illuminate\View\ComponentSlot;
 use InvalidArgumentException;
+use JsonException;
 use JsonSerializable;
 use PHPUnit\Framework\Attributes\DataProvider;
+use RuntimeException;
 use Seo\Page;
 use Seo\ParsedPage;
 use Seo\Robots;
 use Seo\Seo;
+use Throwable;
 
 final class HeadTest extends TestCase
 {
@@ -591,6 +595,111 @@ final class HeadTest extends TestCase
             ->assertDontSee('rel="canonical"', false)
             ->assertDontSee('og:url', false)
             ->assertDontSee('application/ld+json', false);
+    }
+
+    /** @return iterable<string, array{Closure, class-string<Throwable>}> */
+    public static function brokenSites(): iterable
+    {
+        yield 'a settings store that is down' => [static fn (): array => throw new RuntimeException('down'), RuntimeException::class];
+        yield 'an admin typo in disallow' => [static fn (): array => ['disallow' => ['/my admin/']], InvalidArgumentException::class];
+    }
+
+    /** @param class-string<Throwable> $exception */
+    #[DataProvider('brokenSites')]
+    public function test_in_production_a_head_that_cannot_be_built_is_reported_and_renders_only_a_noindex_title(Closure $resolver, string $exception): void
+    {
+        $this->app->detectEnvironment(static fn (): string => 'production');
+        Exceptions::fake();
+        config(['app.name' => 'Acme']);
+        $this->withSite(['google_verification' => 'code']);
+        $this->seo()->siteUsing($resolver);
+        $head = static fn (string $title): string => "initial-scale=1\">\n<title>{$title}</title>\n<meta name=\"robots\" content=\"noindex, nofollow\">\n</head>";
+
+        $this->visit('/', new Page(title: 'Home <b>', canonical: '/', jsonLd: [['@type' => 'Thing']]))
+            ->assertOk()
+            ->assertSee($head('Home &lt;b&gt;'), false)
+            ->assertHeader('Cache-Control', 'no-store, private');
+        // Once, though the head and NoindexHosts both catch it.
+        Exceptions::assertReportedCount(1);
+        Exceptions::assertReported($exception);
+
+        $this->visit('/faq', title: 'FAQ')->assertOk()->assertSee($head('FAQ'), false);
+        $this->visit('/faq')->assertOk()->assertSee($head('Acme'), false);
+        // The exception handler's page too, whose head is filled after the kernel's try, and without the Page.
+        Route::get('post', static function (Seo $seo): never {
+            $seo->page(title: 'Deleted post');
+            abort(404);
+        });
+        $this->get('/post')
+            ->assertNotFound()
+            ->assertSee($head('Not found'), false)
+            ->assertHeader('Cache-Control', 'no-store, private');
+        Exceptions::assertReportedCount(4);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function nonProductionEnvironments(): iterable
+    {
+        yield 'local' => ['local'];
+        yield 'staging' => ['staging'];
+        yield 'testing' => ['testing'];
+    }
+
+    #[DataProvider('nonProductionEnvironments')]
+    public function test_outside_production_a_head_that_cannot_be_built_throws(string $environment): void
+    {
+        $this->app->detectEnvironment(static fn (): string => $environment);
+        $this->withSite();
+        $this->seo()->siteUsing(static fn (): array => throw new RuntimeException('down'));
+
+        $this->expectExceptionObject(new RuntimeException('down'));
+
+        $this->withoutExceptionHandling()->visit('/faq');
+    }
+
+    /** @return iterable<string, array{Closure(): Page, class-string<Throwable>}> */
+    public static function pageErrors(): iterable
+    {
+        yield 'JSON-LD that cannot be encoded' => [static fn (): Page => new Page(title: 'FAQ', jsonLd: [['@type' => 'Product', 'ratingValue' => NAN]]), JsonException::class];
+        yield 'a published head view that throws' => [static function (): Page {
+            View::composer('seo::head', static fn () => throw new RuntimeException('view'));
+
+            return new Page(title: 'FAQ');
+        }, RuntimeException::class];
+    }
+
+    /**
+     * Only a Site that cannot be built falls back: a page's own error is the app's bug on that page, a 500 that engines
+     * retry, never a 200 that drops it from the index.
+     *
+     * @param  Closure(): Page  $page
+     * @param  class-string<Throwable>  $exception
+     */
+    #[DataProvider('pageErrors')]
+    public function test_in_production_an_error_of_the_page_itself_still_throws(Closure $page, string $exception): void
+    {
+        $this->app->detectEnvironment(static fn (): string => 'production');
+        $this->withSite();
+
+        $this->expectException($exception);
+
+        $this->withoutExceptionHandling()->visit('/faq', $page());
+    }
+
+    /** An error page's head is filled after the kernel's try, where a throw would turn its 404 into a bare 500. */
+    public function test_in_production_an_error_page_whose_head_view_throws_falls_back_with_its_status(): void
+    {
+        $this->app->detectEnvironment(static fn (): string => 'production');
+        Exceptions::fake();
+        $this->withSite();
+        View::composer('seo::head', static fn () => throw new RuntimeException('view'));
+
+        $this->get('/missing')
+            ->assertNotFound()
+            ->assertSee("<title>Not found</title>\n<meta name=\"robots\" content=\"noindex, nofollow\">\n</head>", false)
+            ->assertHeader('Cache-Control', 'no-store, private');
+        Exceptions::assertReportedCount(1);
+        Exceptions::assertReported(RuntimeException::class);
     }
 
     public function test_a_json_response_is_left_alone(): void

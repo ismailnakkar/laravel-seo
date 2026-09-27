@@ -16,6 +16,7 @@ use Illuminate\Support\Arr;
 use InvalidArgumentException;
 use JsonSerializable;
 use LogicException;
+use Throwable;
 
 /**
  * Builds the Site from config('seo') and holds each request's Page. Not final: apps mock it, and Mockery refuses final
@@ -108,7 +109,7 @@ class Seo
         );
     }
 
-    /** The merged Page; null when page() was never called. */
+    /** @internal The merged Page; null when page() was never called. */
     public function pageFor(Request $request): ?Page
     {
         return self::memo()->pages[$request] ?? null;
@@ -134,8 +135,31 @@ class Seo
     }
 
     /**
+     * The language on screen, for a "use it for your account too?" prompt, while the signed-in user's saved language
+     * is another; null otherwise (an account without one is filled instead), and with remember_locale off. Yes posts
+     * its code to route('seo.locale'); Not now is the app's to remember.
+     */
+    public function accountLanguageOffer(): ?Language
+    {
+        /** @var Application $app */
+        $app = Container::getInstance();
+        $locales = Locales::configured();
+        $current = $app->getLocale();
+
+        if ($locales === null || $app->make('config')->get('seo.remember_locale') === false || ! in_array($current, $locales->codes, true)) {
+            return null;
+        }
+
+        // The guard, not request(): a request bound before the auth provider registered has no user resolver.
+        $account = UserLocale::of($app->make('auth')->guard()->user(), $locales);
+
+        return $account === null || $account === $current ? null : new Language($current, true);
+    }
+
+    /**
      * Memoised per Request and locale when a Request is given (a siteUsing() closure may read the locale, and the
-     * locale can change after the first build within a request); rebuilt on every call without one.
+     * locale can change after the first build within a request), a failure too, rethrown as the same instance; rebuilt
+     * on every call without one.
      *
      * @throws InvalidArgumentException for a malformed code-sourced value: url, a disallow entry
      */
@@ -153,14 +177,17 @@ class Seo
         $locale = $app->getLocale();
         $cached = $memo->sites[$request] ?? null;
 
-        if ($cached !== null && $cached['locale'] === $locale) {
-            return $cached['site'];
+        if ($cached === null || $cached['locale'] !== $locale) {
+            try {
+                $site = $build();
+            } catch (Throwable $e) {
+                $site = $e;
+            }
+
+            $memo->sites[$request] = $cached = ['locale' => $locale, 'site' => $site];
         }
 
-        $site = $build();
-        $memo->sites[$request] = ['locale' => $locale, 'site' => $site];
-
-        return $site;
+        return $cached['site'] instanceof Throwable ? throw $cached['site'] : $cached['site'];
     }
 
     /**
@@ -200,7 +227,7 @@ class Seo
         }
     }
 
-    /** robots.txt's Sitemap URL; null without seo.sitemap or sitemapUsing(). */
+    /** @internal robots.txt's Sitemap URL; null without seo.sitemap or sitemapUsing(). */
     public function sitemapUrl(Site $site): ?string
     {
         return $this->listsSitemap() ? $site->to('/sitemap.xml') : null;

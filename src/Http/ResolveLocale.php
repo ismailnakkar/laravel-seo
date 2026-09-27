@@ -12,14 +12,15 @@ use Seo\LocalizedRoute;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * The request's language: a Route::localized() copy's own, else the visitor's choice. In `web` straight after
- * StartSession when two or more locales are configured, so it must never read the user: restoring a remember-me cookie
- * writes the login into the session before AuthenticateSession has checked it. ApplyLocale brings in the account and
- * saves a copy's language as the choice.
+ * The request's language before the user is known: a Route::localized() copy's own, else the one the visitor browses,
+ * the browser's, the default. In `web` straight after StartSession when two or more locales are configured, so it must
+ * never read the user: restoring a remember-me cookie writes the login into the session before AuthenticateSession has
+ * checked it. It writes nothing; ApplyLocale brings in the account and records a copy opened.
  */
 final class ResolveLocale
 {
-    public const string SESSION_KEY = 'seo.locale';
+    /** Not seo.locale: 0.3 sessions hold a browser guess under it, which would outrank the account. */
+    public const string SESSION_KEY = 'seo.browsing';
 
     public function __construct(private readonly Application $app) {}
 
@@ -31,25 +32,18 @@ final class ResolveLocale
             return $next($request);
         }
 
-        $localized = LocalizedRoute::of($request->route());
-        $choice = self::choice($request, $locales, $localized);
-
-        if ($request->hasSession()) {
-            $request->session()->put(self::SESSION_KEY, $choice);
-        }
-
-        $this->app->setLocale($localized->locale ?? $choice);
+        $this->app->setLocale(LocalizedRoute::of($request->route())->locale ?? self::choice($request, $locales));
 
         return $next($request);
     }
 
-    /** @internal The session's, a new session's opened /fr/… page's (ApplyLocale), the browser's, else the default. */
-    public static function choice(Request $request, Locales $locales, ?LocalizedRoute $localized): string
+    /** @internal The language the visitor browses (the session's), else the account's, the browser's, the default. */
+    public static function choice(Request $request, Locales $locales, ?string $account = null): string
     {
-        $saved = $request->hasSession() ? $request->session()->get(self::SESSION_KEY) : null;
+        $browsing = $request->hasSession() ? $request->session()->get(self::SESSION_KEY) : null;
 
-        return (is_string($saved) && in_array($saved, $locales->codes, true) ? $saved : null)
-            ?? ($localized !== null && $localized->locale !== $locales->default && ApplyLocale::opensThePage($request) ? $localized->locale : null)
+        return (is_string($browsing) && in_array($browsing, $locales->codes, true) ? $browsing : null)
+            ?? $account
             ?? $locales->preferredBy($request)
             ?? $locales->default;
     }

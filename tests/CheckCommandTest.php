@@ -734,6 +734,39 @@ final class CheckCommandTest extends TestCase
         $this->assertStringContainsString('  user_locale .... FAIL users has no column [missing]', $output);
     }
 
+    public function test_account_and_redirect_settings_warn_while_the_locale_is_not_remembered(): void
+    {
+        $this->fakeLive();
+        config([
+            'seo.remember_locale'        => false,
+            'seo.entry_redirect'         => ['home'],
+            'seo.user_locale'            => 'locale',
+            'auth.providers.users.model' => User::class,
+        ]);
+        $this->withLocalizedRoutes(['en', 'fr'], static fn () => Route::get('/', static fn () => 'home')->name('home'));
+
+        [$code, $output] = $this->check();
+
+        $this->assertStringContainsString(<<<'TXT'
+            languages
+              entry_redirect . WARN ignored while remember_locale is false
+              user_locale .... WARN ignored while remember_locale is false
+
+            TXT, $output);
+        $this->assertSame(0, $code);
+
+        config(['seo.entry_redirect' => []]);
+        [, $output] = $this->check();
+
+        $this->assertStringContainsString("languages\n  user_locale .... WARN ignored while remember_locale is false\n", $output);
+        $this->assertStringNotContainsString('entry_redirect', $output);
+
+        config(['seo.user_locale' => null]);
+        [, $output] = $this->check();
+
+        $this->assertStringNotContainsString("languages\n", $output);
+    }
+
     public function test_the_user_column_warns_when_the_database_cannot_be_reached(): void
     {
         $this->fakeLive();

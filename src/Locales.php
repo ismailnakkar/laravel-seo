@@ -9,7 +9,11 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use InvalidArgumentException;
 
-/** The languages Route::localized() serves. The default's URL is the bare one, and also x-default. */
+/**
+ * The languages Route::localized() serves. The default's URL is the bare one, and also x-default.
+ *
+ * @internal
+ */
 final readonly class Locales
 {
     /**
@@ -40,7 +44,7 @@ final readonly class Locales
     /**
      * config('seo.locales'), its first code the default; null below two, where the language features are off.
      *
-     * @throws InvalidArgumentException neither a list of hreflang codes nor code => name; a duplicate code
+     * @throws InvalidArgumentException not a list of hreflang codes; a duplicate code
      */
     public static function configured(): ?self
     {
@@ -50,12 +54,12 @@ final readonly class Locales
             return null;
         }
 
-        // Integer keys: a list, gaps and all (array_filter()). Otherwise the older code => name form, names unused.
-        $codes = is_array($locales) ? (array_filter(array_keys($locales), is_string(...)) === [] ? array_values($locales) : array_keys($locales)) : null;
-
-        if ($codes === null || ! array_all($codes, static fn (mixed $code): bool => is_string($code))) {
-            throw new InvalidArgumentException("seo.locales: list the codes, default first, e.g. ['en', 'fr'].");
+        // Integer keys, gaps and all (array_filter()); a code => name map is refused, not guessed at.
+        if (! is_array($locales) || ! array_all($locales, static fn (mixed $code, int|string $key): bool => is_int($key) && is_string($code))) {
+            throw new InvalidArgumentException("seo.locales: list the codes only, default first, e.g. ['en', 'fr']; label them with your own translations.");
         }
+
+        $codes = array_values($locales);
 
         return count($codes) < 2 ? null : new self($codes, $codes[0]);
     }

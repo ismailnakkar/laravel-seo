@@ -20,12 +20,15 @@ use Seo\Seo;
 use Seo\Site;
 use Symfony\Component\HttpFoundation\Request as SymfonyRequest;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
+use Throwable;
 
 /**
  * <x-seo::head />, at the top of <head> after charset and viewport. It prints a marker that fill() replaces once the
  * response exists, so a page() or @seo anywhere in the views counts. Robots come from the Page, else from
  * seo.index_by_default; the title and description fall back to the props, then to `@section('title')` and
  * `@section('description')`. An error response (status 400 and up) ignores the Page and renders noindex.
+ *
+ * @internal The tag is the API; this class may change.
  */
 final class Head extends Component
 {
@@ -62,7 +65,7 @@ final class Head extends Component
         return new HtmlString("<!--seo-head:{$nonce}-->");
     }
 
-    /** @internal The first marker becomes the head; the rest, from a nested full render, go. */
+    /** The first marker becomes the head; the rest, from a nested full render, go. */
     public static function fill(SymfonyResponse $response, SymfonyRequest $request): void
     {
         $container = Container::getInstance();
@@ -84,16 +87,35 @@ final class Head extends Component
         }
 
         unset($memo->heads[$request]);
-        $html = self::build($container->make(Seo::class), $request, $response->getStatusCode() >= 400, $head['title'], $head['description']);
+        $seo = $container->make(Seo::class);
+        $error = $response->getStatusCode() >= 400;
+
+        $site = null;
+
+        try {
+            $site = $seo->site($request);
+            $html = self::build($seo, $site, $request, $error, $head['title'], $head['description']);
+        } catch (Throwable $e) {
+            // Loud outside production. In production the page is served rather than a 500, but never indexable: without
+            // the Site nothing vouches for the host, index_by_default or a canonical. Uncached, so the real head returns
+            // once fixed. The page's own errors (its JSON-LD, a published head view) stay a 500, which engines retry;
+            // not on a response the router never prepared (global middleware, an HttpResponseException outside a
+            // route), whose head is filled after the kernel's try, where a throw escapes it.
+            throw_unless(app()->isProduction() && ($site === null || $error), $e);
+            $memo->report($e);
+            $response->headers->set('Cache-Control', 'no-store');
+            $title = self::first([$error ? null : $seo->pageFor($request)?->title, $head['title']]) ?? config('app.name');
+            $html = '<title>' . e(is_string($title) ? $title : '') . "</title>\n<meta name=\"robots\" content=\"noindex, nofollow\">\n";
+        }
+
         // setContent() replaces the View that assertViewHas() reads.
         $original = $response->original;
         $response->setContent(array_shift($parts) . $html . implode('', $parts));
         $response->original = $original;
     }
 
-    private static function build(Seo $seo, Request $request, bool $error, ?string $titleFallback, ?string $descriptionFallback): string
+    private static function build(Seo $seo, Site $site, Request $request, bool $error, ?string $titleFallback, ?string $descriptionFallback): string
     {
-        $site = $seo->site($request);
         // An error response does not serve the content its Page was set for.
         $page = $error ? null : $seo->pageFor($request);
 
