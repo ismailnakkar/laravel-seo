@@ -334,32 +334,34 @@ guard's model without the column, such as an admin's, is left alone.
 
 The site follows what the member browses; the account does not. After opening `/fr`, a member reads French everywhere
 in that browser, while mail, other devices and other hosts keep the account's language. Likewise, a guest who switches
-just before signing in keeps that language on the site, and the account keeps its own. To offer saving the language on
-screen, render this in your layout, outside error views (a 419 or 429 page can speak the browser's language);
-`Seo::accountLanguageOffer()` returns that language while the account holds another:
+just before signing in keeps that language on the site, and the account keeps its own. To keep the two from drifting,
+render this prompt in your layout, outside error views (a 419 or 429 page can speak the browser's language).
+`Seo::accountLanguageOffer()` returns the language on screen while the account holds another, and
+`Seo::accountLanguage()` the account's:
 
 ```blade
 @inject('seo', \Seo\Seo::class)
 @if ($offer = $seo->accountLanguageOffer())
-    <dialog id="account-language" data-code="{{ $offer->code }}">
+    <dialog id="account-language">
         <form method="POST" action="{{ route('seo.locale') }}">
             @csrf
             <input type="hidden" name="to" value="{{ request()->getRequestUri() }}">
             <p>{{ __('Use this language for your account too?') }}</p>
+            <button name="locale" value="{{ $seo->accountLanguage() }}" class="keep">{{ __('No, keep mine') }}</button>
             <button name="locale" value="{{ $offer->code }}">{{ __('Yes') }}</button>
-            <button formmethod="dialog">{{ __('Not now') }}</button>
         </form>
     </dialog>
     <script type="module">
         const dialog = document.getElementById('account-language');
-        const declined = `account-language-declined-${dialog.dataset.code}`;
-        dialog.addEventListener('close', () => sessionStorage.setItem(declined, '1'));
-        if (! sessionStorage.getItem(declined)) dialog.showModal();
+        // Escape closes it without a button, and Chrome may skip the cancel event: it counts as keeping.
+        dialog.addEventListener('close', () => dialog.querySelector('form').requestSubmit(dialog.querySelector('.keep')));
+        dialog.showModal();
     </script>
 @endif
 ```
 
-Yes posts to the switcher. Not now is remembered per language until the tab closes.
+Both answers post to the switcher, so either leaves the page and the account in one language: Yes saves the page's
+language to the account, No switches the page back to the account's. Escape counts as No; a click outside does nothing.
 
 The package saves the one column with a normal model save, so model events fire. To save it your own way, such as
 through a service that also clears a user cache, register a closure in a service provider's `boot(Seo $seo)`. The

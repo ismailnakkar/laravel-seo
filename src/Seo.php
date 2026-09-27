@@ -135,25 +135,38 @@ class Seo
     }
 
     /**
-     * The language on screen, for a "use it for your account too?" prompt, while the signed-in user's saved language
-     * is another; null otherwise (an account without one is filled instead), and with remember_locale off. Yes posts
-     * its code to route('seo.locale'); Not now is the app's to remember.
+     * The signed-in user's saved language; null for a guest, an account without one or with a code outside `locales`,
+     * and with remember_locale off.
+     */
+    public function accountLanguage(): ?string
+    {
+        /** @var Application $app */
+        $app = Container::getInstance();
+        $locales = Locales::configured();
+
+        if ($locales === null || $app->make('config')->get('seo.remember_locale') === false) {
+            return null;
+        }
+
+        // The guard, not request(): a request bound before the auth provider registered has no user resolver.
+        return UserLocale::of($app->make('auth')->guard()->user(), $locales);
+    }
+
+    /**
+     * The language on screen while accountLanguage() is another, for a "use it for your account too?" prompt; null
+     * otherwise (an account without one is filled instead). The prompt's two answers post this code or
+     * accountLanguage() to route('seo.locale'), so either leaves the page and the account in one language.
      */
     public function accountLanguageOffer(): ?Language
     {
         /** @var Application $app */
         $app = Container::getInstance();
-        $locales = Locales::configured();
         $current = $app->getLocale();
+        $account = $this->accountLanguage();
 
-        if ($locales === null || $app->make('config')->get('seo.remember_locale') === false || ! in_array($current, $locales->codes, true)) {
-            return null;
-        }
-
-        // The guard, not request(): a request bound before the auth provider registered has no user resolver.
-        $account = UserLocale::of($app->make('auth')->guard()->user(), $locales);
-
-        return $account === null || $account === $current ? null : new Language($current, true);
+        return $account === null || $account === $current || ! in_array($current, Locales::configured()->codes ?? [], true)
+            ? null
+            : new Language($current, true);
     }
 
     /**

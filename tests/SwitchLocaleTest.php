@@ -22,20 +22,20 @@ final class SwitchLocaleTest extends LanguagesTestCase
     private const string MODAL = <<<'BLADE'
         @inject('seo', \Seo\Seo::class)
         @if ($offer = $seo->accountLanguageOffer())
-            <dialog id="account-language" data-code="{{ $offer->code }}">
+            <dialog id="account-language">
                 <form method="POST" action="{{ route('seo.locale') }}">
                     @csrf
                     <input type="hidden" name="to" value="{{ request()->getRequestUri() }}">
                     <p>{{ __('Use this language for your account too?') }}</p>
+                    <button name="locale" value="{{ $seo->accountLanguage() }}" class="keep">{{ __('No, keep mine') }}</button>
                     <button name="locale" value="{{ $offer->code }}">{{ __('Yes') }}</button>
-                    <button formmethod="dialog">{{ __('Not now') }}</button>
                 </form>
             </dialog>
             <script type="module">
                 const dialog = document.getElementById('account-language');
-                const declined = `account-language-declined-${dialog.dataset.code}`;
-                dialog.addEventListener('close', () => sessionStorage.setItem(declined, '1'));
-                if (! sessionStorage.getItem(declined)) dialog.showModal();
+                // Escape closes it without a button, and Chrome may skip the cancel event: it counts as keeping.
+                dialog.addEventListener('close', () => dialog.querySelector('form').requestSubmit(dialog.querySelector('.keep')));
+                dialog.showModal();
             </script>
         @endif
         BLADE;
@@ -462,7 +462,7 @@ final class SwitchLocaleTest extends LanguagesTestCase
         $this->assertMatchesRegularExpression('~value="ar" lang="ar"\s*>العربية</button>~', $html);
     }
 
-    public function test_the_readme_modal_offers_the_language_on_screen_to_the_account_until_it_is_saved(): void
+    public function test_either_answer_to_the_readme_modal_leaves_the_page_and_the_account_in_one_language(): void
     {
         $member = User::create(['name' => 'member', 'locale' => 'ar']);
 
@@ -471,37 +471,48 @@ final class SwitchLocaleTest extends LanguagesTestCase
         $this->get('/modal')->assertOk()
             ->assertSee('action="http://localhost/locale"', false)
             ->assertSee('<input type="hidden" name="to" value="/modal">', false)
+            ->assertSee('<button name="locale" value="ar" class="keep">No, keep mine</button>', false)
             ->assertSee('<button name="locale" value="fr">Yes</button>', false);
 
-        $this->post('/locale', ['locale' => 'fr', 'to' => '/modal'])->assertRedirect('/modal');
-
+        // No: the page goes back to the account's language.
+        $this->post('/locale', ['locale' => 'ar', 'to' => '/fr/terms'])->assertRedirect('/ar/terms');
         $this->get('/modal')->assertOk()->assertDontSee('<dialog', false);
-        $this->assertSame('fr', $member->fresh()?->locale);
+        $this->assertSame('ar', $member->fresh()?->locale);
+
+        // Yes: the account takes the page's.
+        $this->get('/fr/terms');
+        $this->post('/locale', ['locale' => 'fr', 'to' => '/modal'])->assertRedirect('/modal');
+        $this->get('/modal')->assertOk()->assertDontSee('<dialog', false);
+        $this->assertSame('fr', $member->refresh()->locale);
+
         $this->assertStringContainsString(self::MODAL, (string)file_get_contents(__DIR__ . '/../README.md'));
     }
 
-    /** @return iterable<string, array{?string, string, ?string}> the account's language, the one on screen, the offer */
+    /** @return iterable<string, array{?string, string, ?string, ?string}> column, screen, accountLanguage(), offer */
     public static function offers(): iterable
     {
-        yield 'another language on screen' => ['ar', 'fr', 'fr'];
-        yield "the account's language on screen" => ['ar', 'ar', null];
-        yield 'an account without one' => [null, 'fr', null];
-        yield 'a language not configured on screen' => ['ar', 'de', null];
+        yield 'another language on screen' => ['ar', 'fr', 'ar', 'fr'];
+        yield "the account's language on screen" => ['ar', 'ar', 'ar', null];
+        yield 'an account without one' => [null, 'fr', null, null];
+        yield 'an account holding a code no longer configured' => ['de', 'fr', null, null];
+        yield 'a language not configured on screen' => ['ar', 'de', 'ar', null];
     }
 
     #[DataProvider('offers')]
-    public function test_the_account_language_offer(?string $account, string $screen, ?string $offer): void
+    public function test_the_account_language_and_its_offer(?string $column, string $screen, ?string $account, ?string $offer): void
     {
-        $this->actingAs(User::create(['name' => 'member', 'locale' => $account]));
+        $this->actingAs(User::create(['name' => 'member', 'locale' => $column]));
         $this->app->setLocale($screen);
 
+        $this->assertSame($account, $this->seo()->accountLanguage());
         $this->assertEquals($offer === null ? null : new Language($offer, true), $this->seo()->accountLanguageOffer());
     }
 
-    public function test_a_guest_gets_no_account_language_offer(): void
+    public function test_a_guest_has_no_account_language_and_gets_no_offer(): void
     {
         $this->get('/fr/terms');
 
+        $this->assertNull($this->seo()->accountLanguage());
         $this->assertNull($this->seo()->accountLanguageOffer());
     }
 }

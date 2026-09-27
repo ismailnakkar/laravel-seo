@@ -7,6 +7,17 @@ All notable changes to `ismailnakkar/laravel-seo` are listed here. The format fo
 While 0.x, a breaking change bumps the minor and a patch never breaks. Semver covers what the README documents;
 anything marked `@internal` may change in any release.
 
+## [0.4.2] - 2026-09-27
+
+### Added
+
+- `Seo::accountLanguage()`: the signed-in user's saved language, for the prompt's answer that keeps it.
+
+### Changed
+
+- The README's account-language prompt asks Yes or No, keep mine, and Escape counts as No, so the page and the account
+  always end up in one language. Its Not now left them apart until the tab closed.
+
 ## [0.4.1] - 2026-09-27
 
 ### Added

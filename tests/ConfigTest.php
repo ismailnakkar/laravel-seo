@@ -220,6 +220,7 @@ final class ConfigTest extends TestCase
     public function test_one_language_lists_none_and_offers_none(): void
     {
         $this->assertSame([], $this->seo()->languages());
+        $this->assertNull($this->seo()->accountLanguage());
         $this->assertNull($this->seo()->accountLanguageOffer());
     }
 }

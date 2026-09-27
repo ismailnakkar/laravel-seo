@@ -771,6 +771,7 @@ final class ResolveLocaleTest extends LanguagesTestCase
 
         $this->assertSame('http://localhost/es/terms', route('terms'));
         $this->assertEquals([new Language('en', false), new Language('fr', false), new Language('ar', false), new Language('es', true)], $this->seo()->languages());
+        $this->assertNull($this->seo()->accountLanguage());
         $this->assertNull($this->seo()->accountLanguageOffer());
         $this->assertNull(session(ResolveLocale::SESSION_KEY));
         $this->assertSame('ar', $member->fresh()?->locale);
