@@ -7,6 +7,25 @@ All notable changes to `ismailnakkar/laravel-seo` are listed here. The format fo
 While 0.x, a breaking change bumps the minor and a patch never breaks. Semver covers what the README documents;
 anything marked `@internal` may change in any release.
 
+## [0.5.1] - 2026-09-28
+
+### Changed
+
+- The `Seo::alternatesUsing()` closure runs once per page, not twice, and still never for a noindex or error page or
+  one that sets its own canonical.
+
+### Fixed
+
+- An `alternatesUsing()` answer whose `alternates` have integer keys, such as a list of paths, throws a
+  `LogicException`. 0.5.0 rendered `hreflang="0"`.
+- A `sitemapUsing()` entry that is not a `SitemapEntry` throws a `LogicException` naming `Seo::sitemapUsing()`, not a
+  PHP error.
+- `seo:check` on the apex of a `www.` site no longer FAILs the `www` row, which expected the site itself to redirect. A
+  host given in Unicode (`bücher.test`) is checked as its punycode, so the site's own host is no longer taken for
+  another.
+- A page that renders another full view keeps its own head's title and description fallbacks. The nested view's
+  replaced them.
+
 ## [0.5.0] - 2026-09-28
 
 Every step from 0.4 is in [UPGRADE.md](UPGRADE.md#from-04-to-05).
@@ -98,6 +117,7 @@ Every step from 0.3 is in [UPGRADE.md](UPGRADE.md#from-03-to-04).
 
 0.3.3 and earlier: see [UPGRADE.md](UPGRADE.md).
 
+[0.5.1]: https://github.com/ismailnakkar/laravel-seo/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/ismailnakkar/laravel-seo/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/ismailnakkar/laravel-seo/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/ismailnakkar/laravel-seo/compare/v0.4.0...v0.4.1

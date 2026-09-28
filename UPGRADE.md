@@ -4,18 +4,19 @@
 
 Localized routes and the visitor's and account's language moved, unchanged, to
 [ismailnakkar/laravel-localization](https://github.com/ismailnakkar/laravel-localization). A single-language app
-requires `^0.5`, deletes any `locales`, `remember_locale`, `user_locale` and `entry_redirect` left in `config/seo.php`,
-and is done. A multilingual app, in order:
+replaces any `Route::localized(function () { … })` with the routes inside it, deletes any `locales`, `remember_locale`,
+`user_locale` and `entry_redirect` left in `config/seo.php`, requires `^0.5`, and is done. Without laravel-localization,
+`Route::localized()` fails at boot: "Attribute [localized] does not exist." To keep it, follow the steps below.
 
-**1. Install laravel-localization** with laravel-seo in one step (it refuses laravel-seo 0.4):
-`composer require ismailnakkar/laravel-seo:^0.5 ismailnakkar/laravel-localization:^0.1 -W`. Without it,
-`Route::localized()` fails at boot: "Method Illuminate\Routing\Router::localized does not exist".
+A multilingual app edits before it installs: `composer require` runs `package:discover`, which boots the app and fails
+on a 0.4 key or name in config, a provider or a routes file. In order:
 
-**2. Move the four keys.** `php artisan vendor:publish --tag=localization-config`, then move `locales`,
-`remember_locale`, `user_locale` and `entry_redirect` from `config/seo.php` to `config/localization.php` and delete them
-from `config/seo.php`. Left there, they make `Route::localized()` throw and `localization:check` FAIL.
+**1. Move the four keys.** Create `config/localization.php` returning `locales`, `remember_locale`, `user_locale` and
+`entry_redirect` as cut from `config/seo.php`, values unchanged (laravel-localization's
+[stub](https://github.com/ismailnakkar/laravel-localization/blob/main/config/localization.php) has a comment for each).
+Left in `config/seo.php`, they make `Route::localized()` throw and `localization:check` FAIL.
 
-**3. Rename** in your code, views, bootstrap and tests:
+**2. Rename** in your code, views, bootstrap and tests:
 
 | 0.4 | 0.5 |
 |---|---|
@@ -32,17 +33,21 @@ from `config/seo.php`. Left there, they make `Route::localized()` throw and `loc
 The session key is reset: every language a 0.4 session holds is forgotten once, so members fall back to their account,
 guests to their browser.
 
-**4. Check in your deploy**: run `php artisan localization:check` next to `seo:check`. It exits 1 on any FAIL.
+**3. Install laravel-localization** with laravel-seo in one step (it refuses laravel-seo 0.4):
+`composer require ismailnakkar/laravel-seo:^0.5 ismailnakkar/laravel-localization:^0.1`.
 
-**5. Rebuild the caches**: `php artisan optimize`. Cached routes carry the old names.
+**4. Rebuild the caches**: `php artisan optimize`. Cached routes carry the old names.
+
+**5. Check in your deploy**: run `php artisan localization:check` next to `seo:check`, after the caches are rebuilt. It
+exits 1 on any FAIL.
 
 ## From 0.3 to 0.4
 
 Require `^0.4`, deploy, then rebuild the caches: `php artisan optimize`. No config change is needed unless you use the
 `code => name` form of `locales`. Where the 0.3.x notes below differ, the rules here replace them.
 
-**The language rules** (multilingual apps). See laravel-localization's README,
-[How the language is chosen](https://github.com/ismailnakkar/laravel-localization#how-the-language-is-chosen).
+**The language rules** (multilingual apps). See laravel-localization's
+[README](https://github.com/ismailnakkar/laravel-localization).
 
 - The session and the account are now two things. The session holds the language the visitor browses: opening a
   `Route::localized()` copy in another language sets it, for every page of the site in that browser. The account holds
@@ -53,14 +58,14 @@ Require `^0.4`, deploy, then rebuild the caches: `php artisan optimize`. No conf
   French dashboard, and the account stays `ar`. Only the switcher does. An account without a language is filled once,
   on a page view, with the visitor's, and a language your own sign-up stores is never overwritten.
 - To let a member save the language on screen to their account, add the prompt from laravel-localization's README,
-  [The account and the language prompt](https://github.com/ismailnakkar/laravel-localization#the-account-and-the-language-prompt).
+  [Account language](https://github.com/ismailnakkar/laravel-localization#account-language).
   `Seo::accountLanguageOffer()` returns that language while the account holds another.
 - A guest who uses the switcher just before signing in keeps that language for the session, and an account that already
   holds one keeps it.
 - Under Laravel's default middleware priority, a CSRF (419) or throttle (429) refusal for a member who has not browsed
   another language this session now speaks the browser's language, not the account's. An app that ranks its session
   check earlier ranks `ApplyLocale` after it with one line: see laravel-localization's README,
-  [Middleware order](https://github.com/ismailnakkar/laravel-localization#middleware-order).
+  [Middleware](https://github.com/ismailnakkar/laravel-localization#middleware).
 - From another origin, a sibling subdomain included, only a top-level GET opens a copy.
 - Tests that expect a page view to replace `user_locale` now fail: assert the page's language, or post the switcher.
 
@@ -72,7 +77,7 @@ default first: `['en', 'fr']`.
 
 **`remember_locale` is new** (default `true`). If your app sets the locale itself, set it to `false` and guard your
 middleware, as in laravel-localization's README,
-[Your own locale logic](https://github.com/ismailnakkar/laravel-localization#your-own-locale-logic).
+[Middleware](https://github.com/ismailnakkar/laravel-localization#middleware).
 
 **A broken SEO config no longer takes pages down in production.** A throwing `siteUsing()`, or an invalid `url` or
 `disallow`, is reported, and pages are served with only a `<title>` and `noindex, nofollow`. Run `seo:check` in your
