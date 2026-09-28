@@ -15,7 +15,7 @@ use GuzzleHttp\Psr7\UriResolver;
 use ValueError;
 
 /**
- * A page's search markup as Googlebot reads it, plus sitemap, URL and header helpers, for SeoAssertions and seo:check.
+ * A page's search markup as Googlebot reads it, plus helpers for SeoAssertions and seo:check.
  *
  * @internal
  */
@@ -27,10 +27,10 @@ final readonly class ParsedPage
 
     public const array SITEMAP_TYPES = ['application/xml', 'text/xml'];
 
-    /** Googlebot obeys both names, and pages are read as Googlebot. */
+    /** Googlebot obeys both. */
     private const string ROBOTS = 'meta[name="robots" i], meta[name="googlebot" i]';
 
-    /** `name: value` directives, so their name is never a crawler's. */
+    /** `name: value` directives: their prefix is not a crawler scope. */
     private const array VALUED = ['max-snippet', 'max-image-preview', 'max-video-preview', 'unavailable_after'];
 
     private const string CANONICAL = 'link[rel~="canonical" i]';
@@ -39,36 +39,33 @@ final readonly class ParsedPage
 
     private const string SITEMAP_NS = 'http://www.sitemaps.org/schemas/sitemap/0.9';
 
-    /** Read only in <head>. An svg <title> is an icon's name, not the page's. */
+    /** Honoured only in <head>. An svg <title> names an icon, not the page. */
     private const string HEAD_ONLY = 'title:not(svg *), ' . self::CANONICAL . ', ' . self::HREFLANG . ', ' . self::ROBOTS;
 
     /**
-     * @param  list<string>  $canonicals  hrefs in <head>, trimmed; '' for a missing href
-     * @param  list<string>  $robots  lower-cased, from the robots metas in <head>; `none` as noindex, nofollow
-     * @param  array<string, string>  $alternates  hreflang => href, in <head>
-     * @param  list<array<string, mixed>>  $jsonLd  every node on the page: lists and @graph flattened, bad JSON skipped
-     * @param  list<string>  $stylesheets  hrefs, anywhere on the page
-     * @param  list<string>  $scripts  srcs, anywhere on the page
+     * @param  list<string>  $canonicals  '' for a missing href
+     * @param  list<string>  $robots
+     * @param  array<string, string>  $alternates  hreflang => href
+     * @param  list<array<string, mixed>>  $jsonLd
+     * @param  list<string>  $stylesheets
+     * @param  list<string>  $scripts
      */
     private function __construct(
         public ?string $htmlLang,
-        public int $titles,           // in <head>
-        public ?string $title,        // the first in <head>, whitespace collapsed as a browser tab shows it
+        public int $titles,
+        public ?string $title,
         public array $canonicals,
         public bool $seoTagsInBody,
         public array $robots,
-        public ?string $description,  // the first in <head>, trimmed; null when absent or blank
+        public ?string $description,
         public array $alternates,
-        public ?string $ogImage,      // the first in <head>, trimmed; null when absent or blank
+        public ?string $ogImage,
         public array $jsonLd,
         public array $stylesheets,
         public array $scripts,
     ) {}
 
-    /**
-     * HTML5 tree building: anything that does not belong in <head> (a <div>, an <img>, stray text) closes it and
-     * every later tag lands in <body>; Google stops reading <head> there too. Never throws on markup.
-     */
+    /** HTML5 parsing: anything not allowed in <head> (a <div>, stray text) ends it, for Google too. Never throws. */
     public static function parse(string $html): self
     {
         $document = HTMLDocument::createFromString($html, LIBXML_NOERROR);
@@ -112,8 +109,7 @@ final readonly class ParsedPage
     }
 
     /**
-     * The X-Robots-Tag directives Googlebot obeys. A `crawler:` prefix scopes the rest of its line, so only unscoped
-     * and `googlebot:` directives count.
+     * Googlebot's X-Robots-Tag directives. A `crawler:` prefix scopes the rest of its line.
      *
      * @param  array<string>  $lines  never joined: a scope ends with its line
      * @return list<string>
@@ -139,7 +135,7 @@ final readonly class ParsedPage
         return $robots;
     }
 
-    /** @return array{'urlset'|'sitemapindex', list<string>}|null the root and its trimmed locs; null when neither */
+    /** @return array{'urlset'|'sitemapindex', list<string>}|null root name and locs */
     public static function sitemap(string $xml): ?array
     {
         try {
@@ -155,13 +151,12 @@ final readonly class ParsedPage
         return [$root->localName, array_map(static fn (Element $loc): string => trim($loc->textContent), iterator_to_array($root->getElementsByTagNameNS(self::SITEMAP_NS, 'loc'), false))];
     }
 
-    /** An empty path counts as '/': https://x.test and https://x.test/ are one URL. */
+    /** https://x.test and https://x.test/ are one URL. */
     public static function sameUrl(string $a, string $b): bool
     {
         return self::withRootPath($a) === self::withRootPath($b);
     }
 
-    /** As a browser resolves a Location or an href; null when either cannot be parsed. */
     public static function resolve(string $base, string $reference): ?string
     {
         try {
@@ -195,7 +190,7 @@ final readonly class ParsedPage
         return (string)preg_replace('~^([a-z][a-z0-9+.-]*://[^/?#]*)(?=[?#]|\z)~i', '$1/', $url);
     }
 
-    /** @return list<string> `none` expanded; max-image-preview:none stays whole */
+    /** @return list<string> max-image-preview:none stays whole */
     private static function directive(string $directive): array
     {
         return match ($directive = trim($directive)) {

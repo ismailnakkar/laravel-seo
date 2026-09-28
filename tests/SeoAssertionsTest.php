@@ -24,10 +24,8 @@ final class SeoAssertionsTest extends TestCase
 {
     use SeoAssertions;
 
-    /** The index host's robots.txt. */
     private const string ROBOTS = "User-agent: *\nDisallow: /admin/\n\nSitemap: http://localhost/sitemap.xml\n";
 
-    /** A crawlable head for http://localhost/case. */
     private const string HEAD = '<title>Case</title><link rel="canonical" href="http://localhost/case">';
 
     protected function setUp(): void
@@ -210,7 +208,7 @@ final class SeoAssertionsTest extends TestCase
         }
     }
 
-    /** @param Closure(): mixed $route registers a robots.txt route over the package's */
+    /** @param Closure(): mixed $route */
     #[DataProvider('brokenRobots')]
     public function test_robots_txt_fails_on(Closure $route, string $message): void
     {
@@ -314,7 +312,6 @@ final class SeoAssertionsTest extends TestCase
     /** @return iterable<string, array{Closure(self): mixed, string}> */
     public static function incompleteSitemaps(): iterable
     {
-        // Valid except for the status or Content-Type under test.
         $faq = '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>http://localhost/faq</loc></url></urlset>';
 
         yield 'a 404' => [static fn () => Route::get('sitemap.xml', static fn (): Response => new Response($faq, 404, ['Content-Type' => 'application/xml'])), 'http://localhost/sitemap.xml answered 404'];
@@ -368,7 +365,7 @@ final class SeoAssertionsTest extends TestCase
 
     public function test_assert_hreflang_reciprocal_fails_when_a_copy_renders_the_accept_language_locale(): void
     {
-        // Deliberately wrong, like cuty's pre-fix middleware: the browser's language overrides the URL's.
+        // Deliberately wrong: the browser's language overrides the URL's.
         $this->withAlternates(['en', 'fr', 'ar', 'es'], ['negotiated'], function (Request $request) {
             $this->app->setLocale((string)$request->getPreferredLanguage(['en', 'fr', 'ar', 'es']));
             $this->seo()->page(title: 'Terms');
@@ -427,7 +424,6 @@ final class SeoAssertionsTest extends TestCase
         $this->withSitemap(['/', '/faq', '/payment-proof']);
     }
 
-    /** /hop/1 → … → /hop/5, which answers 200. */
     private function hops(): void
     {
         Route::get('hop/{n}', static fn (string $n) => (int)$n < 5 ? redirect('/hop/' . ((int)$n + 1)) : 'end');

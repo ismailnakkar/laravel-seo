@@ -4,12 +4,13 @@ declare(strict_types=1);
 
 namespace Seo\Tests;
 
-use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Facades\Route as Router;
 use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Seo\Page;
+use Seo\ParsedPage;
+use Seo\Robots;
 
 final class AlternatesSeamTest extends TestCase
 {
@@ -69,6 +70,15 @@ final class AlternatesSeamTest extends TestCase
         $this->seo()->alternatesFor($this->faq(), '/faq');
     }
 
+    public function test_an_answer_whose_alternates_are_a_list_throws(): void
+    {
+        $this->seo()->alternatesUsing(static fn (): array => ['path' => '/faq', 'alternates' => ['/faq', '/fr/faq']]);
+
+        $this->expectException(LogicException::class);
+
+        $this->seo()->alternatesFor($this->faq(), '/faq');
+    }
+
     public function test_no_matched_route_never_calls_the_resolver(): void
     {
         $calls = 0;
@@ -82,22 +92,29 @@ final class AlternatesSeamTest extends TestCase
         $this->assertSame(0, $calls);
     }
 
-    public function test_site_alternates_calls_the_resolver_once(): void
+    public function test_a_page_calls_the_resolver_once_and_a_head_without_a_path_canonical_never(): void
     {
+        $this->withSite();
         $calls = 0;
         $this->seo()->alternatesUsing(static function () use (&$calls): array {
             $calls++;
 
             return ['path' => '/faq', 'alternates' => ['en' => '/faq', 'fr' => '/fr/faq']];
         });
-        $route = $this->faq();
-        $request = Request::create('/faq?page=2');
-        $request->setRouteResolver(static fn (): Route => $route);
 
+        $page = ParsedPage::parse((string)$this->visit('/faq?page=2', new Page(title: 'FAQ', paginated: true))->assertOk()->getContent());
+
+        $this->assertSame(['http://localhost/faq?page=2'], $page->canonicals);
         $this->assertSame(
             ['en' => 'http://localhost/faq?page=2', 'fr' => 'http://localhost/fr/faq?page=2', 'x-default' => 'http://localhost/faq?page=2'],
-            $this->withSite()->alternates($request, new Page(title: 'FAQ', paginated: true)),
+            $page->alternates,
         );
+
+        $this->visit('/faq', new Page(title: 'FAQ', robots: Robots::none))->assertOk();
+        $this->visit('/faq', new Page(title: 'FAQ', canonical: '/other'))->assertOk();
+        $this->visit('http://dl.test/faq', new Page(title: 'FAQ'))->assertOk();
+        Router::get('gone', static fn () => abort(404));
+        $this->get('/gone')->assertNotFound();
         $this->assertSame(1, $calls);
     }
 

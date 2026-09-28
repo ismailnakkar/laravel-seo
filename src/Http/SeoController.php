@@ -13,15 +13,10 @@ use Seo\Memo;
 use Seo\Seo;
 use Throwable;
 
-/**
- * routes/seo.php's files. Cache headers are set here on success only: SetCacheHeaders route middleware would also make
- * the fail-open robots.txt publicly cacheable.
- *
- * @internal
- */
+/** @internal Cache headers set here, on success only: SetCacheHeaders would also cache the fail-open robots.txt. */
 final class SeoController
 {
-    /** @internal IndexNow's key format, shared with seo:indexnow. */
+    /** @internal */
     public const string INDEX_NOW_KEY = '/^[A-Za-z0-9-]{8,128}$/D';
 
     private const string FALLBACK = "User-agent: *\nDisallow:\n";
@@ -34,8 +29,7 @@ final class SeoController
             $site = $seo->site($request);
             $body = $site->robotsTxt($site->roleOf($request->getHost()), $seo->sitemapUrl($site));
         } catch (Throwable $e) {
-            // A 5xx robots.txt means disallow-all (RFC 9309) and Google stops crawling for 12 hours. Serve allow-all,
-            // uncached, so the real policy returns once fixed.
+            // A 5xx robots.txt means disallow-all (RFC 9309). Allow-all, uncached, until fixed.
             Container::getInstance()->make(Memo::class)->report($e);
 
             return new Response(self::FALLBACK, 200, ['Content-Type' => self::TEXT, 'Cache-Control' => 'no-store']);
@@ -44,7 +38,7 @@ final class SeoController
         return $this->cached($request, new Response($body, 200, ['Content-Type' => self::TEXT]));
     }
 
-    /** sitemap.xml, or chunk $n of its index. Does not fail open: a broken sitemap resolver is a normal 500. */
+    /** Not fail-open: a broken sitemap resolver is a normal 500. */
     public function sitemap(Request $request, Seo $seo, ?string $n = null): Response|RedirectResponse
     {
         $site = $seo->site($request);

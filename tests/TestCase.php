@@ -25,21 +25,20 @@ use Symfony\Component\HttpFoundation\Response;
 
 abstract class TestCase extends BaseTestCase
 {
-    /** The index host; unlisted hosts (go.test) crawl, dl.test is noindex. */
+    /** The index host; dl.test is noindex, other hosts crawl. */
     protected const string URL = 'http://localhost';
 
-    /** Rendered with the fixture layout on every host. */
     protected const array PAGES = ['/', '/faq', '/payment-proof', '/reset-password'];
 
-    /** @var (Closure(Request): ?Page)|null null sets no Page */
+    /** @var (Closure(Request): ?Page)|null */
     protected ?Closure $fixturePage = null;
 
-    /** The pages' @section('title'): the head's fallback when no Page is passed. */
+    /** The pages' @section('title'), the head's fallback without a Page. */
     protected ?string $fixtureTitle = null;
 
     protected function setUp(): void
     {
-        // Static, and Laravel 12 keeps it between tests: each app must start from its own provider's boot.
+        // Laravel 12 keeps this static between tests; each app must start from its own provider's boot.
         PreventRequestsDuringMaintenance::flushState();
 
         parent::setUp();
@@ -55,7 +54,7 @@ abstract class TestCase extends BaseTestCase
     protected function defineEnvironment($app): void
     {
         $app['config']->set('app.url', self::URL);
-        $app['config']->set('app.key', 'base64:' . base64_encode(str_repeat('k', 32))); // the web group encrypts cookies
+        $app['config']->set('app.key', 'base64:' . base64_encode(str_repeat('k', 32))); // web group encrypts cookies
         $app['config']->set('view.paths', [__DIR__ . '/Fixtures/views']);
         $app['config']->set('database.default', 'testing');
     }
@@ -74,13 +73,13 @@ abstract class TestCase extends BaseTestCase
         }
     }
 
-    /** Relative URLs hit the index host, not whichever host the previous request left url() on. */
+    /** Relative URLs hit the index host, not the host the previous request left url() on. */
     protected function prepareUrlForRequest($uri)
     {
         return is_string($uri) && str_starts_with($uri, '/') ? self::URL . $uri : parent::prepareUrlForRequest($uri);
     }
 
-    /** A controller action, reusable for extra paths; <html lang> follows the app locale, as an app layout's does. */
+    /** <html lang> follows the app locale, as an app layout's does. */
     protected function renderFixturePage(Request $request, Seo $seo): View
     {
         $page = $this->fixturePage === null ? null : ($this->fixturePage)($request);
@@ -92,11 +91,7 @@ abstract class TestCase extends BaseTestCase
         return view('page', ['title' => $this->fixtureTitle, 'lang' => $this->app->getLocale()]);
     }
 
-    /**
-     * GET $url with the fixture pages rendering $page, or no Page and $title as the fallback.
-     *
-     * @return TestResponse<Response>
-     */
+    /** @return TestResponse<Response> */
     protected function visit(string $url, ?Page $page = null, ?string $title = null): TestResponse
     {
         $this->fixturePage = $page === null ? null : static fn (): Page => $page;
@@ -106,7 +101,7 @@ abstract class TestCase extends BaseTestCase
     }
 
     /**
-     * Laravel returns PendingCommand|int; the console output is always mocked here.
+     * Narrows Laravel's PendingCommand|int: console output is always mocked here.
      *
      * @param  string  $command
      * @param  array<string, mixed>  $parameters
@@ -124,7 +119,7 @@ abstract class TestCase extends BaseTestCase
         return $this->app->make(Seo::class);
     }
 
-    /** @param  array<string, mixed>  $config  seo.* keys */
+    /** @param  array<string, mixed>  $config */
     protected function withSite(array $config = []): Site
     {
         config(['seo' => [
@@ -156,9 +151,8 @@ abstract class TestCase extends BaseTestCase
     }
 
     /**
-     * $paths in every language, $codes[0]'s bare and the others' under their code, each copy setting its locale as a
-     * localization package does; with a fake alternatesUsing() closure answering for exactly these routes, and null
-     * for any other. The routes on the same URIs are replaced.
+     * Routes $paths per language ($codes[0] bare, others under their code) and fakes alternatesUsing() for just these.
+     * Routes already on these URIs are replaced.
      *
      * @param  list<string>  $codes  the first is the default
      * @param  list<string>  $paths
@@ -170,7 +164,7 @@ abstract class TestCase extends BaseTestCase
         $router = $this->app->make(Router::class);
         $uris = [];
 
-        // Default last, as a localization package registers them: a default route opening with {page} would catch /fr/….
+        // Default last, as localization packages do: a default route opening with {page} would catch /fr/….
         foreach ([...array_slice($codes, 1), $default] as $code) {
             foreach ($paths as $path) {
                 $uri = ($code === $default ? '' : "{$code}/") . ltrim($path, '/');

@@ -161,7 +161,7 @@ final class HeadTest extends TestCase
 
     public function test_a_component_layouts_stray_attributes_never_reach_the_head(): void
     {
-        // Blade hands an enclosing component's undeclared attributes to every nested component.
+        // Blade passes an enclosing component's undeclared attributes to nested components.
         $this->withSite();
         $attributes = new ComponentAttributeBag(['view' => 'compact', 'request' => 'x', 'seo' => 'y']);
         Route::get('x', static fn () => Blade::render('<x-seo::head />', ['attributes' => $attributes]));
@@ -171,7 +171,7 @@ final class HeadTest extends TestCase
 
     public function test_a_slot_on_the_head_itself_never_replaces_its_rendered_title(): void
     {
-        // Blade merges a component's slots into its view data, where a title slot would shadow the computed title.
+        // Blade merges slots into the view data, where a title slot would shadow the computed title.
         $this->withSite();
         Route::get('x', static function (Seo $seo): string {
             $seo->page(title: 'FAQ');
@@ -544,6 +544,18 @@ final class HeadTest extends TestCase
         $this->assertStringNotContainsString('<!--seo-head:', $html);
     }
 
+    public function test_a_view_rendering_another_full_view_keeps_the_outer_heads_title_fallback(): void
+    {
+        $this->withSite();
+        Route::get('x', static fn (): string => Blade::render("<head><x-seo::head title=\"Outer\" /></head><body>{!! view('page', ['title' => 'Nested'])->render() !!}</body>"));
+
+        $html = (string)$this->get('/x')->assertOk()->getContent();
+
+        $this->assertStringStartsWith('<head><title>Outer · UpFiles</title>', $html);
+        $this->assertSame(1, substr_count($html, '<title>'));
+        $this->assertStringNotContainsString('<!--seo-head:', $html);
+    }
+
     public function test_a_response_cache_in_route_middleware_stores_the_filled_head(): void
     {
         $this->withSite();
@@ -625,7 +637,7 @@ final class HeadTest extends TestCase
 
         $this->visit('/faq', title: 'FAQ')->assertOk()->assertSee($head('FAQ'), false);
         $this->visit('/faq')->assertOk()->assertSee($head('Acme'), false);
-        // The exception handler's page too, whose head is filled after the kernel's try, and without the Page.
+        // The exception handler's page too: its head is filled after the kernel's try, without the Page.
         Route::get('post', static function (Seo $seo): never {
             $seo->page(title: 'Deleted post');
             abort(404);
@@ -669,8 +681,7 @@ final class HeadTest extends TestCase
     }
 
     /**
-     * Only a Site that cannot be built falls back: a page's own error is the app's bug on that page, a 500 that engines
-     * retry, never a 200 that drops it from the index.
+     * Only a broken Site falls back: a page's own bug must 500, which engines retry, not 200 and drop from the index.
      *
      * @param  Closure(): Page  $page
      * @param  class-string<Throwable>  $exception
@@ -820,7 +831,7 @@ final class HeadTest extends TestCase
 
     public function test_the_site_is_rebuilt_when_the_locale_changes_within_a_request(): void
     {
-        // A siteUsing() closure may read the locale, and a Site built before the match sets it must not leak it.
+        // siteUsing() may read the locale, which routing can set after the Site was first built.
         $this->seo()->siteUsing(static fn (Application $app): array => ['name' => $app->getLocale() === 'fr' ? 'Accueil' : 'Home']);
         $request = Request::create('/fr');
         $site = $this->seo()->site($request);

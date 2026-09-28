@@ -19,16 +19,15 @@ use Seo\Http\NoindexHosts;
 use Seo\View\Head;
 
 /** @internal Registered by package auto-discovery. */
-class SeoServiceProvider extends ServiceProvider
+final class SeoServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/seo.php', 'seo');
 
-        // Octane-safe singleton: it holds closures, never resolved values.
+        // Holds closures only, so a singleton is Octane-safe; per-request state lives in the scoped Memo.
         $this->app->singleton(Seo::class);
-        // Scoped, so an Octane request or a queue job (whose console Request is shared) starts empty; keyed by Request
-        // within a scope.
+        // Scoped, not just Request-keyed: queue jobs share one console Request.
         $this->app->scoped(Memo::class);
     }
 
@@ -43,18 +42,17 @@ class SeoServiceProvider extends ServiceProvider
             $blade->directive('seo', static fn (string $expression): string => "<?php app(\\Seo\\Seo::class)->page({$expression}); ?>");
         });
 
-        // ResponsePrepared fires before route middleware (a response cache) reads the body; RequestHandled catches the
-        // exception handler's pages, which the router never prepares.
+        // ResponsePrepared runs before route middleware reads the body; RequestHandled covers exception pages.
         $events->listen([ResponsePrepared::class, RequestHandled::class], static fn (ResponsePrepared|RequestHandled $event) => Head::fill($event->response, $event->request));
 
-        // Global, so a noindex host's redirects, 404s and files carry the header too. Skipped when already listed.
+        // Global, so redirects and 404s on a noindex host carry the header too.
         $this->callAfterResolving(Kernel::class, static fn (HttpKernel $kernel) => $kernel->pushMiddleware(NoindexHosts::class));
 
-        // A 503 robots.txt reads as disallow-all, whoever serves it.
+        // Crawlers read a 503 robots.txt as disallow-all.
         PreventRequestsDuringMaintenance::except(['robots.txt']);
 
         if ($this->app->make('config')->get('seo.routes')) {
-            // Before the app's routes, so one of its own on the same URI replaces it.
+            // Before the app's routes, so an app route on the same URI wins.
             $this->loadRoutesFrom(__DIR__ . '/../routes/seo.php');
         }
 

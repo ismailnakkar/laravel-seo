@@ -9,7 +9,7 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
-/** A language copy's locale, as a localization package sets it, so <html lang> follows the URL. */
+/** Sets the locale as a localization package does, so <html lang> follows the URL. */
 final class SetLocale
 {
     public function __construct(private readonly Application $app) {}

@@ -79,7 +79,17 @@ final class CheckCommandTest extends TestCase
         $this->assertSame($default, $twice);
     }
 
-    /** @return iterable<string, array{Closure(string): (PromiseInterface|Closure), string}> the live robots.txt from the app's body */
+    public function test_an_idn_host_is_checked_as_the_punycode_the_site_stores(): void
+    {
+        $this->withUpfiles(['url' => 'http://bücher.test']);
+        Http::fake();
+
+        [, $output] = $this->check(['url' => ['https://bücher.test']]);
+
+        $this->assertStringContainsString("\nxn--bcher-kva.test (index)\n", $output);
+    }
+
+    /** @return iterable<string, array{Closure(string): (PromiseInterface|Closure), string}> */
     public static function robotsFailures(): iterable
     {
         yield 'lines prepended' => [
@@ -90,7 +100,6 @@ final class CheckCommandTest extends TestCase
             static fn (): PromiseInterface => Http::response('<h1>Not found</h1>', 404, ['Content-Type' => 'text/html']),
             'FAIL 404 (expected 200; crawlers read a 4xx as no rules and a 5xx as disallow-all)',
         ];
-        // The app's body leads, so no managed block was prepended.
         yield 'lines appended' => [
             static fn (string $body): PromiseInterface => Http::response("{$body}User-agent: GPTBot\nDisallow: /\n", 200, ['Content-Type' => 'text/plain']),
             'FAIL differs from the app\'s body at line 9: expected "", got "User-agent: GPTBot"',
@@ -185,7 +194,7 @@ final class CheckCommandTest extends TestCase
         $this->assertSame(0, $code);
     }
 
-    /** @return iterable<string, array{array<string, string>, string}> the index's files, the row */
+    /** @return iterable<string, array{array<string, string>, string}> */
     public static function sitemapIndexFailures(): iterable
     {
         $urlset = self::sitemapXml('urlset', self::LOCS);
@@ -235,7 +244,7 @@ final class CheckCommandTest extends TestCase
         $this->assertStringNotContainsString('https://www.upfiles.com/login', $output);
     }
 
-    /** @return iterable<string, array{Closure(): (PromiseInterface|Closure), string}> the live /faq */
+    /** @return iterable<string, array{Closure(): (PromiseInterface|Closure), string}> */
     public static function unfitSamples(): iterable
     {
         yield 'canonical elsewhere' => [
@@ -288,7 +297,7 @@ final class CheckCommandTest extends TestCase
         $this->assertSame(1, $code);
     }
 
-    /** @return iterable<string, array{Closure(): array<string, PromiseInterface>, string}> overrides of the live site */
+    /** @return iterable<string, array{Closure(): array<string, PromiseInterface>, string}> */
     public static function describedSamples(): iterable
     {
         $bare = static fn (): PromiseInterface => self::html(self::page('https://upfiles.com/login', ['<meta name="description" content="Questions about UpFiles.">' => '']));
@@ -353,7 +362,7 @@ final class CheckCommandTest extends TestCase
         Http::assertNothingSent();
     }
 
-    /** @return iterable<string, array{array<string, string>, string, int}> replacements in the live home page, the row, the exit code */
+    /** @return iterable<string, array{array<string, string>, string, int}> */
     public static function unbrandedHomes(): iterable
     {
         yield 'title without the brand' => [['<title>FAQ · UpFiles</title>' => '<title>exe.io - Monetize your traffic</title>'], 'WARN title "exe.io - Monetize your traffic" does not contain Site name "UpFiles"', 0];
@@ -397,7 +406,7 @@ final class CheckCommandTest extends TestCase
         $this->assertSame(0, $code);
     }
 
-    /** @return iterable<string, array{string, Closure(): PromiseInterface, bool, string}> Site::$logo, the live logo, whether the policy disallows /img/, the row */
+    /** @return iterable<string, array{string, Closure(): PromiseInterface, bool, string}> */
     public static function logos(): iterable
     {
         $png = static fn (): PromiseInterface => Http::response('png', 200, ['Content-Type' => 'image/png']);
@@ -434,7 +443,7 @@ final class CheckCommandTest extends TestCase
         $this->assertRow('  home ........... PASS title contains "UpFiles"; WebSite.name "UpFiles"', $output);
     }
 
-    /** @return iterable<string, array{string, Closure(): (PromiseInterface|Closure), string}> the refused UA fragment, the refusal */
+    /** @return iterable<string, array{string, Closure(): (PromiseInterface|Closure), string}> */
     public static function refusedAgents(): iterable
     {
         yield 'AI search agent challenged' => [
@@ -510,7 +519,7 @@ final class CheckCommandTest extends TestCase
         $this->assertSame(1, $code);
     }
 
-    /** @return iterable<string, array{string, string}> the www fetch error, the row */
+    /** @return iterable<string, array{string, string}> */
     public static function wwwErrors(): iterable
     {
         yield 'refused' => ["cURL error 7: Failed to connect to www.upfilesgo.com port 443 after 3 ms: Couldn't connect to server", "SKIP www.upfilesgo.com: cURL error 7: Failed to connect to www.upfilesgo.com port 443 after 3 ms: Couldn't connect to server"];
@@ -527,7 +536,7 @@ final class CheckCommandTest extends TestCase
         $this->assertRow("  www ............ {$row}", $output);
     }
 
-    /** @return iterable<string, array{Closure(): (PromiseInterface|Closure), string}> the live http://upfilesgo.com/ */
+    /** @return iterable<string, array{Closure(): (PromiseInterface|Closure), string}> */
     public static function httpRedirects(): iterable
     {
         yield 'straight to the site' => [static fn (): PromiseInterface => Http::response('', 308, ['Location' => 'https://upfiles.com']), 'PASS http://upfilesgo.com/ → 308 https://upfiles.com'];
@@ -585,7 +594,30 @@ final class CheckCommandTest extends TestCase
         $this->assertSame(0, $code);
     }
 
-    /** @return iterable<string, array{Closure(): PromiseInterface, Closure(): PromiseInterface, list<string>}> the live root and favicon */
+    public function test_the_apex_of_a_www_site_is_not_probed_for_the_site_itself(): void
+    {
+        $this->withUpfiles(['url' => 'https://www.upfiles.com']);
+        $this->fakeLive([
+            'https://upfiles.com/robots.txt' => Http::response($this->robotsBody(HostRole::crawl), 200, ['Content-Type' => 'text/plain']),
+            'http://upfiles.com/'            => Http::response('', 301, ['Location' => 'https://www.upfiles.com/']),
+            'https://www.upfiles.com/*'      => self::html(self::page('https://www.upfiles.com/')),
+        ]);
+
+        [$code, $output] = $this->check(['url' => ['https://upfiles.com']]);
+
+        $this->assertStringEndsWith(<<<'TXT'
+
+            upfiles.com (crawl)
+              robots.txt ..... PASS 106 bytes, matches the app's body
+              http ........... PASS http://upfiles.com/ → 301 https://www.upfiles.com/
+
+            0 FAIL, 0 WARN, 0 SKIP · exit 0
+
+            TXT, $output);
+        $this->assertSame(0, $code);
+    }
+
+    /** @return iterable<string, array{Closure(): PromiseInterface, Closure(): PromiseInterface, list<string>}> */
     public static function noindexHosts(): iterable
     {
         yield 'header missing on both' => [
@@ -704,11 +736,7 @@ final class CheckCommandTest extends TestCase
         $this->assertSame(1, $code);
     }
 
-    /**
-     * The upfiles Site.
-     *
-     * @param  array<string, mixed>  $overrides
-     */
+    /** @param array<string, mixed> $overrides */
     private function withUpfiles(array $overrides = []): void
     {
         $this->withSite([
@@ -757,7 +785,7 @@ final class CheckCommandTest extends TestCase
 
     /**
      * @param  array<string, mixed>  $parameters
-     * @return array{int, string} the exit code and the report
+     * @return array{int, string}
      */
     private function check(array $parameters = []): array
     {

@@ -98,5 +98,7 @@ Every step from 0.3 is in [UPGRADE.md](UPGRADE.md#from-03-to-04).
 
 0.3.3 and earlier: see [UPGRADE.md](UPGRADE.md).
 
-[0.5.0]: https://github.com/ismailnakkar/laravel-seo/compare/v0.4.2...HEAD
-[0.4.0]: https://github.com/ismailnakkar/laravel-seo/compare/v0.3.3...HEAD
+[0.5.0]: https://github.com/ismailnakkar/laravel-seo/compare/v0.4.2...v0.5.0
+[0.4.2]: https://github.com/ismailnakkar/laravel-seo/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/ismailnakkar/laravel-seo/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/ismailnakkar/laravel-seo/compare/v0.3.3...v0.4.0

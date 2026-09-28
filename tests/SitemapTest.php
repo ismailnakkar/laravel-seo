@@ -12,7 +12,7 @@ use InvalidArgumentException;
 use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
-use Seo\HostRole;
+use Seo\Robots;
 use Seo\SitemapEntry;
 
 final class SitemapTest extends TestCase
@@ -41,7 +41,7 @@ final class SitemapTest extends TestCase
 
     public function test_locs_are_escaped_for_xml(): void
     {
-        // `"` is not a URI character, so it is percent-encoded before XML escaping sees it.
+        // `"` is not a URI character, so it is percent-encoded before XML escaping.
         $this->withSite();
         $this->withSitemap(["/a'b\"c?x=1&y=2"]);
 
@@ -133,7 +133,7 @@ final class SitemapTest extends TestCase
 
     public function test_a_loc_expands_on_the_route_the_router_would_pick_fallbacks_last(): void
     {
-        // Registered first, the fallback still matches last; the earlier plain route beats the later catch-all.
+        // The fallback matches last though registered first; a plain route beats a later catch-all.
         $this->withSite();
         Route::fallback(static fn () => 'fallback');
         Route::get('pricing', static fn () => 'pricing');
@@ -193,6 +193,17 @@ final class SitemapTest extends TestCase
 
         $this->expectException(LogicException::class);
         $this->expectExceptionMessage('http://go.test/x');
+
+        iterator_to_array($this->seo()->sitemap());
+    }
+
+    public function test_a_resolver_entry_that_is_not_a_sitemap_entry_throws_naming_the_api(): void
+    {
+        $this->withSite();
+        $this->seo()->sitemapUsing(static fn (): array => ['/faq']);
+
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage('Seo::sitemapUsing(): the closure yields SitemapEntry objects, got string.');
 
         iterator_to_array($this->seo()->sitemap());
     }
@@ -333,7 +344,7 @@ final class SitemapTest extends TestCase
     public static function notRouteNames(): iterable
     {
         yield 'an unknown name' => ['about', 'about'];
-        yield 'a backed enum' => [HostRole::index, HostRole::class];
+        yield 'a backed enum' => [Robots::index, Robots::class];
         yield 'an integer' => [1, '1'];
     }
 

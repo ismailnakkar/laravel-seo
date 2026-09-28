@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Arr;
 use Illuminate\Support\HtmlString;
+use Illuminate\Support\Str;
 use Illuminate\View\Component;
 use Illuminate\View\Factory;
 use JsonSerializable;
@@ -23,25 +24,16 @@ use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 use Throwable;
 
 /**
- * <x-seo::head />, at the top of <head> after charset and viewport. It prints a marker that fill() replaces once the
- * response exists, so a page() or @seo anywhere in the views counts. Robots come from the Page, else from
- * seo.index_by_default; the title and description fall back to the props, then to `@section('title')` and
- * `@section('description')`. An error response (status 400 and up) ignores the Page and renders noindex.
+ * Prints a marker that fill() replaces once the response exists, so a page() or @seo in any view counts.
  *
- * @internal The tag is the API; this class may change.
+ * @internal The tag is the API.
  */
 final class Head extends Component
 {
-    /**
-     * Output goes raw into <script>, so every HTML-significant character is escaped. Invalid UTF-8 in an admin-edited
-     * value becomes U+FFFD instead of a 500; depth and NAN still throw.
-     */
+    /** Raw inside <script>, so HTML characters are escaped; invalid UTF-8 (admin input) becomes U+FFFD, not a 500. */
     private const int JSON = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR;
 
-    /**
-     * Blade hands an enclosing component's undeclared attributes to this constructor, so it takes nothing but the
-     * fallbacks and resolves its services in render().
-     */
+    /** Blade passes an enclosing component's attributes here, so services are resolved in render(), not injected. */
     public function __construct(
         private readonly Htmlable|string|null $title = null,
         private readonly Htmlable|string|null $description = null,
@@ -54,39 +46,43 @@ final class Head extends Component
         $view = $container->make('view');
         $memo = $container->make(Memo::class);
         $request = $container->make('request');
-        // Random, so page content cannot forge the marker.
-        $nonce = $memo->heads[$request]['nonce'] ?? bin2hex(random_bytes(8));
-        $memo->heads[$request] = [
-            'nonce'       => $nonce,
+        // Random, so page content cannot forge it; one per render, so the head keeps its render's fallbacks. Keyed
+        // whole, as a digits-only nonce would become an int key.
+        $marker = '<!--seo-head:' . bin2hex(random_bytes(8)) . '-->';
+        $memo->heads[$request] ??= [];
+        $memo->heads[$request][$marker] = [
             'title'       => self::fallback($this->title, 'title', $view),
             'description' => self::fallback($this->description, 'description', $view),
         ];
 
-        return new HtmlString("<!--seo-head:{$nonce}-->");
+        return new HtmlString($marker);
     }
 
-    /** The first marker becomes the head; the rest, from a nested full render, go. */
+    /** The first of this request's markers becomes the head; the rest, from a nested full render, go. */
     public static function fill(SymfonyResponse $response, SymfonyRequest $request): void
     {
         $container = Container::getInstance();
         $memo = $container->make(Memo::class);
-        // A kernel sub-request made while the page rendered has replaced the container's request.
+        // A kernel sub-request during rendering replaces the container's request.
         /** @var Request $request */
         $request = $request instanceof Request && isset($memo->heads[$request]) ? $request : $container->make('request');
 
-        // JsonResponse, StreamedResponse and BinaryFileResponse are not this class; response($array) is, with a JSON body.
+        // response($array) is also a Response, with a JSON body.
         if (! isset($memo->heads[$request]) || ! $response instanceof Response || ! str_contains((string)$response->headers->get('Content-Type', 'text/html'), 'html')) {
             return;
         }
 
-        $head = $memo->heads[$request];
-        $parts = explode("<!--seo-head:{$head['nonce']}-->", (string)$response->getContent());
+        $heads = $memo->heads[$request];
+        $content = (string)$response->getContent();
+        preg_match_all('/<!--seo-head:[0-9a-f]{16}-->/', $content, $matches);
+        $marker = array_find($matches[0], static fn (string $marker): bool => isset($heads[$marker]));
 
-        if (count($parts) === 1) {
+        if ($marker === null) {
             return;
         }
 
         unset($memo->heads[$request]);
+        $head = $heads[$marker];
         $seo = $container->make(Seo::class);
         $error = $response->getStatusCode() >= 400;
 
@@ -96,11 +92,9 @@ final class Head extends Component
             $site = $seo->site($request);
             $html = self::build($seo, $site, $request, $error, $head['title'], $head['description']);
         } catch (Throwable $e) {
-            // Loud outside production. In production the page is served rather than a 500, but never indexable: without
-            // the Site nothing vouches for the host, index_by_default or a canonical. Uncached, so the real head returns
-            // once fixed. The page's own errors (its JSON-LD, a published head view) stay a 500, which engines retry;
-            // not on a response the router never prepared (global middleware, an HttpResponseException outside a
-            // route), whose head is filled after the kernel's try, where a throw escapes it.
+            // Production serves an uncached noindex head instead of throwing when the Site fails (nothing vouches for
+            // the host) or on an error response (maybe filled after the kernel's try, where a throw escapes). The
+            // page's own errors stay a 500, which engines retry.
             throw_unless(app()->isProduction() && ($site === null || $error), $e);
             $memo->report($e);
             $response->headers->set('Cache-Control', 'no-store');
@@ -110,7 +104,7 @@ final class Head extends Component
 
         // setContent() replaces the View that assertViewHas() reads.
         $original = $response->original;
-        $response->setContent(array_shift($parts) . $html . implode('', $parts));
+        $response->setContent(Str::before($content, $marker) . $html . str_replace(array_keys($heads), '', Str::after($content, $marker)));
         $response->original = $original;
     }
 
@@ -125,7 +119,9 @@ final class Head extends Component
             $page !== null                                           => $page->robots,
             default                                                  => $site->indexByDefault ? Robots::index : Robots::noindex,
         };
-        $canonical = $robots->indexable() ? $site->canonical($request, $page) : null;
+        // The closure runs once per head, and only when the canonical comes from the request path.
+        $resolved = $robots->indexable() && $page?->canonical === null ? $seo->alternatesFor($request->route(), '/' . trim($request->getPathInfo(), '/')) : null;
+        $canonical = $robots->indexable() ? $site->canonical($request, $page, $resolved) : null;
         $home = $canonical !== null && $site->isHome($canonical);
         $title = self::first([$page?->title, $titleFallback]);
         $fullTitle = match (true) {
@@ -142,7 +138,7 @@ final class Head extends Component
             'description'  => self::first([$page?->description, $descriptionFallback]),
             'robots'       => $robots,
             'canonical'    => $canonical,
-            'alternates'   => $canonical === null ? [] : $site->alternates($request, $page),
+            'alternates'   => $canonical === null ? [] : $site->alternates($request, $page, $resolved),
             'ogUrl'        => $canonical ?? ($page?->canonical === null ? null : $site->to($page->canonical)),
             'image'        => $image === null ? null : $site->to($image),
             'imageAlt'     => $page?->image === null ? $site->name : ($title ?? $site->name),
@@ -163,35 +159,30 @@ final class Head extends Component
         return self::first([$decode($prop), $decode($view->yieldContent($section))]);
     }
 
-    /**
-     * The first non-blank value, trimmed.
-     *
-     * @param  list<?string>  $values
-     */
+    /** @param list<?string> $values */
     private static function first(array $values): ?string
     {
         return array_find(array_map(static fn (?string $value): string => trim((string)$value), $values), static fn (string $value): bool => $value !== '');
     }
 
-    /** @return array<string, mixed> the home page's Organization and WebSite */
+    /** @return array<string, mixed> */
     private static function graph(Site $site): array
     {
+        $shared = [
+            'name'          => $site->name,
+            'alternateName' => $site->alternateNames ?: null,
+            'url'           => $site->to('/'),
+        ];
+
         return ['@context' => 'https://schema.org', '@graph' => [
             // Google wants the most specific Organization subtype.
             Arr::whereNotNull([
-                '@type'         => $site->organizationType,
-                'name'          => $site->name,
-                'alternateName' => $site->alternateNames ?: null,
-                'url'           => $site->to('/'),
-                'logo'          => filled($site->logo) ? $site->to($site->logo) : null,
-                'sameAs'        => $site->sameAs ?: null,
+                '@type' => $site->organizationType,
+                ...$shared,
+                'logo'   => filled($site->logo) ? $site->to($site->logo) : null,
+                'sameAs' => $site->sameAs ?: null,
             ]),
-            Arr::whereNotNull([
-                '@type'         => 'WebSite',
-                'name'          => $site->name,
-                'alternateName' => $site->alternateNames ?: null,
-                'url'           => $site->to('/'),
-            ]),
+            Arr::whereNotNull(['@type' => 'WebSite', ...$shared]),
         ]];
     }
 }

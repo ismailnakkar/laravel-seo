@@ -31,10 +31,8 @@ final readonly class RobotsMatcher
     /**
      * The token's group, else `*`: any Disallow prefix matching path+query blocks. /robots.txt is always allowed.
      *
-     * @param  string  $token  a product token, e.g. 'Googlebot-Image'
-     *
-     * @throws InvalidArgumentException $token is not a product token: a full user-agent string would silently read `*`;
-     *                                  $path does not start with '/': a URL would match nothing
+     * @throws InvalidArgumentException $token is not a product token (a user-agent string would silently read `*`),
+     *                                  or $path does not start with '/' (a URL would match nothing)
      */
     public function allows(string $token, string $path): bool
     {

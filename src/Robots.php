@@ -6,13 +6,13 @@ namespace Seo;
 
 enum Robots: string
 {
-    /** Indexable. Large previews for Discover and AI answers; snippet limits deliberately absent. */
+    /** Indexable, with large image previews for Discover and AI answers. */
     case index = 'max-image-preview:large';
 
-    /** Out of the index, links followed: first-party utility pages (password reset, verify). */
+    /** Utility pages, such as password reset. */
     case noindex = 'noindex, follow';
 
-    /** Out of the index, links not followed: pages pointing at user-submitted destinations (link interstitials). */
+    /** Pages linking to user-submitted URLs. */
     case none = 'noindex, nofollow';
 
     public function indexable(): bool

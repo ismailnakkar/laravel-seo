@@ -14,14 +14,14 @@ use Seo\Http\SeoController;
 use Seo\Seo;
 use Symfony\Component\Console\Attribute\AsCommand;
 
-/** @internal The command is the API: seo:indexnow. */
+/** @internal The command is the API. */
 #[AsCommand(name: 'seo:indexnow')]
 final class IndexNowCommand extends Command
 {
     /** Shared endpoint: every participating engine gets the submission. */
     private const string ENDPOINT = 'https://api.indexnow.org/IndexNow';
 
-    /** The protocol's URL limit per request. */
+    /** IndexNow's per-request URL limit. */
     private const int CHUNK = 10_000;
 
     protected $signature = 'seo:indexnow {url?*} {--all}';
@@ -47,7 +47,7 @@ final class IndexNowCommand extends Command
             $this->fail('The key file route is not registered: set seo.routes to true, or name your own key route seo.indexnow.');
         }
 
-        // Only a path lands on the origin: `example.com/x`, with no scheme, is not one and fails the host check.
+        // Only a path goes on the origin: scheme-less `example.com/x` is not one and fails the host check.
         $urls = array_map(static fn (string $url): string => str_starts_with($url, '/') ? $site->to($url) : $url, $urls);
 
         if ($this->option('all')) {
@@ -62,14 +62,14 @@ final class IndexNowCommand extends Command
             $this->fail('The sitemap lists no URLs.');
         }
 
-        // The key file vouches for its own host only; one foreign URL fails the whole request.
+        // The key file vouches for its own host only: one foreign URL fails the whole request.
         $offHost = array_filter($urls, static fn (string $url): bool => strtolower((string)parse_url($url, PHP_URL_HOST)) !== $site->host());
 
         if ($offHost !== []) {
             $this->fail("Not on {$site->host()}, the host the key file verifies: " . implode(', ', $offHost));
         }
 
-        // All bodies encoded before sending: an unencodable URL sends nothing.
+        // Encode every body first, so an unencodable URL sends nothing.
         $bodies = array_map(static fn (array $chunk): string => json_encode([
             'host'        => $site->host(),
             'key'         => $key,

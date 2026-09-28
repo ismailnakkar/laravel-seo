@@ -19,7 +19,7 @@ use Seo\Testing\RobotsMatcher;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Output\OutputInterface;
 
-/** @internal The command is the API: seo:check. */
+/** @internal The command is the API. */
 #[AsCommand(name: 'seo:check')]
 final class CheckCommand extends Command
 {
@@ -27,10 +27,7 @@ final class CheckCommand extends Command
 
     protected $description = 'Audit the live robots.txt, sitemap, pages, crawler access and redirects for what a kernel test cannot see';
 
-    /**
-     * AI search indexers, and Claude-User. Never named in robots.txt, so a block is the edge's. Spelled as the vendors
-     * spell them: edge user-agent rules are case-sensitive.
-     */
+    /** Never named in robots.txt, so a block is the edge's. Vendor spelling: edge UA rules are case-sensitive. */
     private const array AGENTS = [
         'OAI-SearchBot', 'Claude-SearchBot', 'PerplexityBot', 'DuckAssistBot', 'Amzn-SearchBot', 'meta-webindexer',
         'MistralAI-Index', 'Claude-User',
@@ -75,14 +72,15 @@ final class CheckCommand extends Command
 
         foreach ($this->argument('url') ?: [$site->url] as $url) {
             $host = parse_url(str_contains($url, '://') ? $url : "//{$url}", PHP_URL_HOST);
+            $host = is_string($host) && $host !== '' ? Site::ascii($host) : null;
 
-            if (! is_string($host) || $host === '') {
+            if ($host === null) {
                 $this->error("[{$url}] is not a URL or a host.");
 
                 return self::FAILURE;
             }
 
-            $hosts[strtolower($host)] = true;
+            $hosts[$host] = true;
         }
 
         $this->write("seo:check · site {$site->url} · crawler rows spoof user agents from this machine's IP and are indicative only");
@@ -93,7 +91,7 @@ final class CheckCommand extends Command
         foreach (array_keys($hosts) as $host) {
             $role = $site->roleOf($host);
             $expected = $site->robotsTxt($role, $sitemapUrl);
-            $this->write("{$host} ({$role->value})");
+            $this->write("{$host} ({$role->name})");
             $this->robotsTxt($host, $expected);
             $locs = [];
 
@@ -112,7 +110,8 @@ final class CheckCommand extends Command
             $from = "http://{$host}/";
             $this->redirect('http', $from, $this->fetch($from, ParsedPage::CHROME), ["https://{$host}/", $site->to('/')]);
 
-            if (! str_starts_with($host, 'www.')) {
+            // A www site's apex: www.H is the site, not an alias.
+            if (! str_starts_with($host, 'www.') && "www.{$host}" !== $site->host()) {
                 $this->www($site, $host, $locs);
             }
         }
@@ -260,7 +259,7 @@ final class CheckCommand extends Command
         };
     }
 
-    /** Judged against the local Site, whose settings must match production's. Returns the crawler baseline. */
+    /** Judged against the local Site, which must match production's. Returns the crawler baseline. */
     private function home(Site $site, string $host, RobotsMatcher $robots): Response|string
     {
         $url = $site->to('/');
@@ -372,9 +371,8 @@ final class CheckCommand extends Command
     }
 
     /**
-     * SKIPs a www host that does not resolve or connect: nothing to consolidate. Any other fetch error (TLS, timeout)
-     * FAILs. The index host also probes its first non-root sitemap path, which an alias catch-all can answer before
-     * a redirect rule does.
+     * An unreachable www host SKIPs: nothing to consolidate. The index host also probes a sitemap path, which an
+     * alias catch-all can answer before a redirect rule does.
      *
      * @param  list<string>  $locs
      */
@@ -472,6 +470,7 @@ final class CheckCommand extends Command
         }
     }
 
+    /** @param 'PASS'|'FAIL'|'WARN'|'SKIP' $status */
     private function row(string $check, string $status, string $detail): void
     {
         if (isset($this->counts[$status])) {
@@ -504,7 +503,7 @@ final class CheckCommand extends Command
         };
     }
 
-    /** The 2xx response, or why the request was refused: its error or status. */
+    /** The 2xx response, or the error or status that refused it. */
     private static function accepted(Response|string $response): Response|string
     {
         return is_string($response) || $response->successful() ? $response : (string)$response->status();

@@ -18,13 +18,10 @@ use JsonSerializable;
 use LogicException;
 use Throwable;
 
-/**
- * Builds the Site from config('seo') and holds each request's Page. Not final: apps mock it, and Mockery refuses final
- * classes.
- */
+/** Builds the Site and holds each request's Page. Not final so apps can mock it. */
 class Seo
 {
-    /** sitemaps.org's per-file limit. */
+    /** sitemaps.org per-file limit. */
     private const int MAX_URLS = 50_000;
 
     private ?Closure $siteResolver = null;
@@ -36,12 +33,9 @@ class Seo
     public function __construct(private readonly Router $router) {}
 
     /**
-     * seo.* config overrides, e.g. values an admin edits: fn (Settings $s) => ['name' => $s->siteName()]. Parameters
-     * are injected when the closure runs, from the current container (under Octane, the request's sandbox), never one
-     * captured at boot. Resets the memo.
+     * seo.* overrides, e.g. admin-edited values. Parameters are injected from the current container on each run.
      *
-     * @param  Closure  $resolver  returns an array of seo.* keys. No typed signature: Closure(mixed ...) rejects
-     *                             fn (Settings $s) in the caller's static analysis.
+     * @param  Closure  $resolver  returns an array of seo.* keys (untyped: Closure(mixed ...) rejects typed params)
      */
     public function siteUsing(Closure $resolver): void
     {
@@ -49,18 +43,15 @@ class Seo
         Container::getInstance()->forgetInstance(Memo::class);
     }
 
-    /** @param Closure $resolver returns an iterable of SitemapEntry, listed first; wins over a seo.sitemap loc it shares */
+    /** @param Closure $resolver returns iterable<SitemapEntry>, listed before and winning over seo.sitemap */
     public function sitemapUsing(Closure $resolver): void
     {
         $this->sitemapResolver = $resolver;
     }
 
     /**
-     * A localization package's answer to "what is each language's path for this route and path?", for canonicals,
-     * hreflang and sitemap expansion. fn (Route $route, string $path): ?array{path: string, alternates: array<string,
-     * string>}: null when the route is not localized; else `path`, this page's own path as its canonical names it, and
-     * `alternates`, hreflang code => path in hreflang order, the default (x-default) first. Paths only: SEO adds the host
-     * and the query.
+     * Each language's path for a route, for canonicals, hreflang and sitemaps. fn (Route, string $path): null when not
+     * localized, else ['path' => canonical path, 'alternates' => [hreflang => path], default first]. Paths only.
      */
     public function alternatesUsing(Closure $resolver): void
     {
@@ -86,12 +77,12 @@ class Seo
             return null;
         }
 
-        if (! is_array($resolved) || ! array_key_exists('path', $resolved) || ! is_array($resolved['alternates'] ?? null) || $resolved['alternates'] === []) {
+        if (! is_array($resolved) || ! array_key_exists('path', $resolved) || ! is_array($resolved['alternates'] ?? null) || $resolved['alternates'] === []
+            || ! array_all($resolved['alternates'], static fn (mixed $path, int|string $code): bool => is_string($code))) {
             throw new LogicException('Seo::alternatesUsing(): the closure returns null or [path => string, alternates => non-empty [code => path]].');
         }
 
-        // One leading slash: `//host` would leave the site through Site::to(). A leading scheme, not "contains ://":
-        // the closure echoes the request path, and `/x/https://y.test` is one.
+        // One leading slash, so `//host` cannot leave the site. Reject only a leading scheme: `/x/https://y` is a path.
         $clean = static function (mixed $value): string {
             if (! is_string($value) || preg_match('~^[a-z][a-z0-9+.-]*://~i', $value) === 1 || str_contains($value, '?') || str_contains($value, '#')) {
                 throw new LogicException('Seo::alternatesUsing(): [' . (is_string($value) ? $value : get_debug_type($value)) . '] is not a path.');
@@ -104,14 +95,11 @@ class Seo
     }
 
     /**
-     * Merges into the current request's Page, for <x-seo::head />: each non-null argument replaces its field (a blank
-     * string counts as unset), jsonLd nodes append. A view's @seo runs after its controller's page(), so it wins. The
-     * head reads the Page once the response exists: a call after that, such as in middleware after $next(), is lost.
+     * Merges into this request's Page: each non-blank argument replaces its field, jsonLd appends.
      *
      * @param  list<array<string, mixed>|JsonSerializable>  $jsonLd
      *
-     * @throws InvalidArgumentException $canonical is neither an absolute http(s) URL nor a root-relative path; $jsonLd is
-     *                                  not a list of arrays and JsonSerializable
+     * @throws InvalidArgumentException invalid $canonical or $jsonLd
      */
     public function page(
         ?string $title = null,
@@ -147,11 +135,9 @@ class Seo
     }
 
     /**
-     * Memoised per Request and locale when a Request is given (a siteUsing() closure may read the locale, and the
-     * locale can change after the first build within a request), a failure too, rethrown as the same instance; rebuilt
-     * on every call without one.
+     * Memoised per Request and locale (siteUsing() may read the locale), failures included; rebuilt without a Request.
      *
-     * @throws InvalidArgumentException for a malformed code-sourced value: url, a disallow entry
+     * @throws InvalidArgumentException malformed url or disallow entry
      */
     public function site(?Request $request = null): Site
     {
@@ -181,15 +167,12 @@ class Seo
     }
 
     /**
-     * The sitemapUsing() entries, then the config('seo.sitemap') locs they do not list: on a shared loc the resolver's
-     * entry, with its lastmod, wins. Lazy: holds the config list only. Absolute locs on Site::host(), path and query
-     * percent-encoded per RFC 3986 (existing escapes kept). A loc on a route the alternatesUsing() closure localizes
-     * expands to one per alternate, in its order.
+     * sitemapUsing() entries, then seo.sitemap locs they do not replace; localized locs expand to every alternate.
      *
      * @return Generator<int, SitemapEntry>
      *
-     * @throws LogicException for a loc on another host
-     * @throws InvalidArgumentException for a seo.sitemap value that is neither a path, a URL nor a route name
+     * @throws LogicException a loc on another host, or a sitemapUsing() entry that is not a SitemapEntry
+     * @throws InvalidArgumentException a seo.sitemap value that is not a path, URL or route name
      */
     public function sitemap(?Request $request = null): Generator
     {
@@ -202,6 +185,10 @@ class Seo
         }
 
         foreach ($this->sitemapResolver === null ? [] : Container::getInstance()->call($this->sitemapResolver) as $entry) {
+            if (! $entry instanceof SitemapEntry) {
+                throw new LogicException('Seo::sitemapUsing(): the closure yields SitemapEntry objects, got ' . get_debug_type($entry) . '.');
+            }
+
             $locs = $expand($entry->loc);
             unset($config[$locs[0]]);
 
@@ -217,13 +204,13 @@ class Seo
         }
     }
 
-    /** @internal robots.txt's Sitemap URL; null without seo.sitemap or sitemapUsing(). */
+    /** @internal null when nothing is listed. */
     public function sitemapUrl(Site $site): ?string
     {
         return $this->listsSitemap() ? $site->to('/sitemap.xml') : null;
     }
 
-    /** @internal A file the sitemap routes serve; null: none. */
+    /** @internal */
     public function sitemapFile(string $name, ?Request $request = null): ?string
     {
         foreach ($this->listsSitemap() ? $this->sitemapFiles($request) : [] as $file => $xml) {
@@ -236,7 +223,7 @@ class Seo
     }
 
     /**
-     * One pass, one file in memory: past 50,000 URLs sitemap-1.xml… then sitemap.xml as their index.
+     * One pass, one file in memory; past MAX_URLS, sitemap-{n}.xml then sitemap.xml as their index.
      *
      * @return Generator<string, string> file name => XML
      */
@@ -276,7 +263,7 @@ class Seo
         yield 'sitemap.xml' => self::xml('sitemapindex', $index);
     }
 
-    /** @param array<string, mixed> $overrides seo.* keys over config; null falls through, '' clears */
+    /** @param array<string, mixed> $overrides null falls through to config, '' clears */
     private static function fromConfig(Application $app, array $overrides): Site
     {
         $config = $app->make('config');
@@ -328,8 +315,7 @@ class Seo
 
             return match (true) {
                 is_string($value) && (str_starts_with($value, '/') || str_contains($value, '://')) => $value,
-                // Relative, so Site::to() puts it on the Site's origin; absolute on a domain route, so another host
-                // fails the host check.
+                // Relative lands on the Site's origin; a domain route stays absolute so the host check sees it.
                 $route !== null => route($value, absolute: $route->getDomain() !== null),
                 default         => throw new InvalidArgumentException("seo.sitemap: [{$shown}] is not a route name. Write paths with a leading '/', e.g. '/{$shown}'."),
             };
@@ -339,8 +325,8 @@ class Seo
     /** @return Closure(string): non-empty-list<string> a loc's URLs, one per alternatesUsing() alternate */
     private function expander(Site $site): Closure
     {
-        // The route the router would pick, fallbacks last, expands the loc; an app without alternatesUsing() never
-        // builds a probe. Matched, never bound: RouteCollection::match() would overwrite the current route's parameters.
+        // Match routes as the router would, fallbacks last, but never bind: RouteCollection::match() would clobber
+        // the current route's parameters.
         $routes = $this->alternatesResolver === null ? [] : $this->router->getRoutes()->get('GET');
         usort($routes, static fn (Route $a, Route $b): int => $a->isFallback <=> $b->isFallback);
 
@@ -352,7 +338,7 @@ class Seo
                 throw new LogicException("Sitemap loc [{$loc}] is not on {$site->host()}: robots.txt advertises the sitemap on the index host only.");
             }
 
-            // Never parse the query: parse_str() renames `v1.2` to `v1_2` and folds repeated keys.
+            // Keep the query raw: parse_str() renames `v1.2` to `v1_2` and folds repeated keys.
             $uri = new Uri($loc);
             $path = '/' . trim($uri->getPath(), '/');
             $query = $uri->getQuery() === '' ? '' : '?' . $uri->getQuery();

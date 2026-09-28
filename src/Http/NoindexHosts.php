@@ -13,10 +13,7 @@ use Seo\Seo;
 use Symfony\Component\HttpFoundation\Response;
 use Throwable;
 
-/**
- * X-Robots-Tag: noindex, nofollow on HostRole::noindex hosts, appended to any existing one: engines apply the most
- * restrictive. Fails open: a throwing Seo::site() is reported (even if logging throws too), never a 500.
- */
+/** Adds X-Robots-Tag: noindex, nofollow on noindex hosts. Fails open: a broken Site is reported, never a 500. */
 final class NoindexHosts
 {
     public function __construct(private readonly Seo $seo) {}
@@ -34,6 +31,7 @@ final class NoindexHosts
         }
 
         if ($noindex) {
+            // Appended to any existing one: engines apply the most restrictive.
             $response->headers->set('X-Robots-Tag', 'noindex, nofollow', false);
         }
 

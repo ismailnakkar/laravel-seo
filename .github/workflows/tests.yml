@@ -38,7 +38,7 @@ jobs:
           php-version: ${{ matrix.php }}
           coverage: none
 
-      # Testbench picks the Laravel major; composer.json's own floors are what prefer-lowest installs.
+      # Testbench picks the Laravel major; prefer-lowest installs composer.json's own floors.
       - run: composer require "orchestra/testbench:${{ matrix.testbench }}" --dev --no-interaction --no-update
 
       - run: composer update --${{ matrix.deps }} --prefer-dist --no-interaction --no-progress

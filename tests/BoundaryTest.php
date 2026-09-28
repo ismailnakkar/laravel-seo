@@ -9,7 +9,7 @@ use Symfony\Component\Finder\Finder;
 
 final class BoundaryTest extends TestCase
 {
-    /** A text scan: PHPStan never sees a name inside class_exists(), a string or a docblock. */
+    /** A text scan: PHPStan misses names in strings, class_exists() and docblocks. */
     public function test_nothing_the_package_ships_names_a_localization_package(): void
     {
         $root = dirname(__DIR__);

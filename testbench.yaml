@@ -1,4 +1,3 @@
-# For Larastan, which boots the app through Testbench: without the provider it sees neither the seo:: views nor the
-# commands' options.
+# Larastan boots through Testbench: without the provider it sees neither the seo:: views nor the commands' options.
 providers:
   - Seo\SeoServiceProvider

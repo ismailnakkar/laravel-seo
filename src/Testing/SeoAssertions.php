@@ -10,21 +10,18 @@ use Illuminate\Testing\TestResponseAssert;
 use Seo\Console\InstallCommand;
 use Seo\ParsedPage;
 use Seo\Seo;
-use Seo\Site;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Crawlability assertions for a Laravel or Testbench test case. Every fetch is a fresh visitor through the kernel:
- * the session is flushed and guards forgotten first, so a test's actingAs() does not survive a helper.
+ * Every fetch is a fresh cookieless visitor: the session is flushed and guards forgotten, so a test's actingAs()
+ * neither reaches a helper nor survives one.
  */
 trait SeoAssertions
 {
     /**
-     * Follows redirects through the kernel as a crawler does, cookieless, and returns the last response. The test's
-     * default headers, cookies, server variables and followingRedirects() neither leak in nor change. Fails with the
-     * whole chain on a loop or after $maxHops.
+     * The test's default headers, cookies, server variables and followingRedirects() neither apply nor change.
      *
-     * @param  array<string, string>  $headers  extra request headers
+     * @param  array<string, string>  $headers
      * @return TestResponse<Response>
      */
     protected function followRedirectChain(string $url, int $maxHops = 10, string $userAgent = ParsedPage::GOOGLEBOT, array $headers = []): TestResponse
@@ -33,11 +30,7 @@ trait SeoAssertions
     }
 
     /**
-     * Cookieless, Googlebot smartphone, at most $maxHops (Google: "ideally no more than 3"). The final response must be:
-     *   - 200 and not noindex (meta or header);
-     *   - after an HTML5 parse: exactly one <title> and one canonical in <head>, the canonical equal to the final URL;
-     *     no title, canonical, robots meta or hreflang link in <body>;
-     *   - og:image not .svg.
+     * Default $maxHops per Google's "ideally no more than 3". Parsed as HTML5, so head tags pushed into <body> fail.
      *
      * @return TestResponse<Response>
      */
@@ -58,20 +51,13 @@ trait SeoAssertions
         return $response;
     }
 
-    /**
-     * X-Robots-Tag or robots meta contains noindex.
-     *
-     * @param  TestResponse<Response>  $response
-     */
+    /** @param TestResponse<Response> $response */
     protected function assertNotIndexable(TestResponse $response): void
     {
         $this->assertTrue(self::seoNoindex($response), ($response->baseRequest?->fullUrl() ?? 'The response') . ' is indexable: neither X-Robots-Tag nor a robots meta says noindex.');
     }
 
-    /**
-     * Each URL, fetched cookieless without following redirects, is noindex AND allowed for Googlebot by its host's
-     * robots.txt: a noindex behind a Disallow is never read.
-     */
+    /** Redirects are not followed. A noindex behind a robots.txt Disallow is never read. */
     protected function assertNoindexNotDisallowed(string ...$urls): void
     {
         foreach ($urls as $url) {
@@ -85,26 +71,23 @@ trait SeoAssertions
         }
     }
 
-    /**
-     * http://{host}/robots.txt, fetched cookieless, answers 200 text/plain and is exactly Site::robotsTxt() for the
-     * host's role. Returns a matcher over it.
-     */
     protected function robotsTxt(string $host): RobotsMatcher
     {
         $url = "http://{$host}/robots.txt";
         $response = $this->seoFetch($url, ParsedPage::GOOGLEBOT);
         $location = $response->headers->get('Location');
         $body = (string)$response->getContent();
-        $site = $this->seoSite();
+        $seo = $this->app->make(Seo::class);
+        $site = $seo->site();
 
         $this->seoAssertOk($response, "{$url} answered {$response->getStatusCode()}" . ($location === null ? '' : " → {$location}") . ' (expected 200).');
         $this->assertStringStartsWith('text/plain', (string)$response->headers->get('Content-Type'), "{$url} is not text/plain.");
-        $this->assertSame($site->robotsTxt($site->roleOf($host), $this->app->make(Seo::class)->sitemapUrl($site)), $body, "{$url} is not Site::robotsTxt() for its host's role.");
+        $this->assertSame($site->robotsTxt($site->roleOf($host), $seo->sitemapUrl($site)), $body, "{$url} is not Site::robotsTxt() for its host's role.");
 
         return new RobotsMatcher($body);
     }
 
-    /** public/robots.txt, public/sitemap.xml, public/indexnow-key.txt and the extra (full) paths must not exist. */
+    /** $extraPaths are full paths, not relative to public/. */
     protected function assertNoStaticShadows(string ...$extraPaths): void
     {
         foreach (InstallCommand::SHADOWS as $file) {
@@ -116,19 +99,13 @@ trait SeoAssertions
         }
     }
 
-    /**
-     * Structural only: never asserts content an admin edits. Fails when Seo::sitemapUrl() is null. The index host's
-     * /sitemap.xml, and each file a <sitemapindex> lists, answers 200 application/xml or text/xml, and:
-     *   - every loc is on Site::host(), with no duplicates, and passes assertCrawlable($loc, 0);
-     *   - every loc is allowed for Googlebot by the index host's robots.txt;
-     *   - titles are unique within one <html lang>; non-empty descriptions likewise;
-     *   - on the home loc: every same-host stylesheet, script src, og:image and logo path is allowed for Googlebot.
-     */
+    /** Structural only: never asserts content an admin edits. */
     protected function assertSitemapComplete(): void
     {
-        $site = $this->seoSite();
+        $seo = $this->app->make(Seo::class);
+        $site = $seo->site();
 
-        $this->assertNotNull($this->app->make(Seo::class)->sitemapUrl($site), 'No sitemap: list pages in seo.sitemap or register Seo::sitemapUsing().');
+        $this->assertNotNull($seo->sitemapUrl($site), 'No sitemap: list pages in seo.sitemap or register Seo::sitemapUsing().');
 
         $url = $site->to('/sitemap.xml');
         [$root, $locs] = $this->seoSitemap($url);
@@ -197,10 +174,8 @@ trait SeoAssertions
     }
 
     /**
-     * Fetches $url's hreflang hrefs cookieless, each with an Accept-Language naming a DIFFERENT language, so a URL
-     * that negotiates its language fails. Each must answer 200, be self-canonical, emit the same alternate set and
-     * render an <html lang> whose primary subtag is its hreflang's. x-default is required and takes the language of
-     * the code sharing its href.
+     * Each alternate is fetched with an Accept-Language naming another language, so a URL that negotiates fails.
+     * x-default must share its href with a code, whose language it takes.
      */
     protected function assertHreflangReciprocal(string $url): void
     {
@@ -261,8 +236,7 @@ trait SeoAssertions
     }
 
     /**
-     * One cookieless kernel GET carrying only these headers. Identity is reset first: the kernel shares one session
-     * store and guard across requests, so a login on one hop would survive into the next and hide a loop.
+     * Resets identity first: session and guards persist across kernel requests, so one hop's login would hide a loop.
      *
      * @param  array<string, string>  $headers
      * @return TestResponse<Response>
@@ -290,7 +264,7 @@ trait SeoAssertions
     }
 
     /**
-     * assertStatus()'s wrapper: a 500 also prints the exception behind it.
+     * Via TestResponseAssert, so a 500 also prints the exception behind it.
      *
      * @param  TestResponse<Response>  $response
      */
@@ -299,15 +273,9 @@ trait SeoAssertions
         TestResponseAssert::withResponse($response)->assertSame(200, $response->getStatusCode(), $message);
     }
 
-    /** A path resolves the way the test's own get() would resolve it. */
     private function seoAbsolute(string $url): string
     {
         return Uri::isAbsolute(new Uri($url)) ? $url : $this->prepareUrlForRequest($url);
-    }
-
-    private function seoSite(): Site
-    {
-        return $this->app->make(Seo::class)->site();
     }
 
     /** @return array{'urlset'|'sitemapindex', list<string>} */
@@ -339,7 +307,7 @@ trait SeoAssertions
 
     /**
      * @param  array<array-key, string>  $values
-     * @return array<array-key, string> every occurrence of the ones that occur more than once, keys kept
+     * @return array<array-key, string> every occurrence of each repeated value
      */
     private static function seoRepeated(array $values): array
     {
@@ -348,7 +316,6 @@ trait SeoAssertions
         return array_filter($values, static fn (string $value): bool => $counts[$value] > 1);
     }
 
-    /** Primary subtag: `fr` for fr-CA. */
     private static function seoLanguage(string $tag): string
     {
         return strtolower(explode('-', $tag)[0]);

@@ -152,7 +152,7 @@ final class CanonicalTest extends TestCase
 
     public function test_to_treats_a_leading_scheme_or_a_network_path_as_another_url(): void
     {
-        // Not "contains ://": a path whose query carries a URL is still a path.
+        // Not "contains ://": a URL in the query leaves it a path.
         $site = $this->withSite();
 
         $this->assertSame('http://localhost/out?to=https://x.test/', $site->to('/out?to=https://x.test/'));

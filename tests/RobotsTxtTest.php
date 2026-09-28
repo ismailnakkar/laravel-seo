@@ -130,7 +130,7 @@ final class RobotsTxtTest extends TestCase
     public function test_the_response_is_plain_text_and_privately_cacheable(): void
     {
         $this->withSite();
-        $this->withSitemap(['/faq']); // so the index host's body, and its ETag, differ from go.test's
+        $this->withSitemap(['/faq']); // so the index host's ETag differs from go.test's
 
         $response = $this->get('/robots.txt')
             ->assertOk()

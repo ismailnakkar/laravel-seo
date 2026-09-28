@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Seo\Tests;
 
-use Illuminate\Http\Request;
 use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
@@ -59,7 +58,7 @@ final class HreflangTest extends TestCase
 
     public function test_the_canonical_names_the_closures_path(): void
     {
-        // The router matches the decoded path, so /%66r/faq reaches the fr copy; the closure names it /fr/faq.
+        // The router matches the decoded path: /%66r/faq is the fr copy, which the closure names /fr/faq.
         $this->withSite();
         $this->withAlternates();
 
@@ -153,22 +152,6 @@ final class HreflangTest extends TestCase
         $this->expectExceptionMessage('Resolver down.');
 
         $this->visit('/faq', new Page(title: 'FAQ'));
-    }
-
-    public function test_a_request_without_a_matched_route_never_calls_the_closure(): void
-    {
-        $site = $this->withSite();
-        $calls = 0;
-        $this->seo()->alternatesUsing(static function () use (&$calls): array {
-            $calls++;
-
-            return ['path' => '/faq', 'alternates' => ['en' => '/faq']];
-        });
-        $request = Request::create('/fr/faq');
-
-        $this->assertSame([], $site->alternates($request));
-        $this->assertSame('http://localhost/fr/faq', $site->canonical($request));
-        $this->assertSame(0, $calls);
     }
 
     /** @return array<string, string> hreflang => href */

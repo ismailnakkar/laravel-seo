@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace Seo;
 
-/** @internal How Site::roleOf() treats a host. */
-enum HostRole: string
+/** @internal */
+enum HostRole
 {
-    /** The Site::$url host: rules plus the Sitemap line. */
-    case index = 'index';
+    /** The Site::$url host. */
+    case index;
 
-    /** Any other host the app answers on (short, link, alias, www): rules, no Sitemap line. */
-    case crawl = 'crawl';
+    /** Any other host the app answers on. */
+    case crawl;
 
-    /** Crawlable, but noindex, nofollow in the head, and in X-Robots-Tag. */
-    case noindex = 'noindex';
+    /** A seo.noindex_hosts host: crawlable, but noindex, nofollow. */
+    case noindex;
 }

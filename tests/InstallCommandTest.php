@@ -65,7 +65,7 @@ final class InstallCommandTest extends TestCase
         $this->assertFileExists("{$this->public}/indexnow-key.txt");
     }
 
-    /** @return iterable<string, array{string}> ralphjsmit/laravel-seo's config/seo.php, cut to what gives it away */
+    /** @return iterable<string, array{string}> ralphjsmit/laravel-seo's config/seo.php, cut to its telltale keys */
     public static function foreignConfigs(): iterable
     {
         yield 'a model' => ["<?php return ['model' => 'App\\Models\\Seo', 'image' => null];\n"];

@@ -11,17 +11,13 @@ use WeakMap;
 /** @internal Per-request state, bound scoped by the provider. */
 final class Memo
 {
-    /**
-     * The Site as last built, or its failure, under the locale it saw.
-     *
-     * @var WeakMap<Request, array{locale: string, site: Site|Throwable}>
-     */
+    /** @var WeakMap<Request, array{locale: string, site: Site|Throwable}> */
     public WeakMap $sites;
 
     /** @var WeakMap<Request, Page> */
     public WeakMap $pages;
 
-    /** @var WeakMap<Request, array{nonce: string, title: ?string, description: ?string}> the pending head */
+    /** @var WeakMap<Request, array<string, array{title: ?string, description: ?string}>> each head render's fallbacks, by its marker */
     public WeakMap $heads;
 
     /** @var WeakMap<Throwable, true> */
@@ -35,10 +31,7 @@ final class Memo
         $this->reported = new WeakMap;
     }
 
-    /**
-     * For the fail-open callers: the head, NoindexHosts and robots.txt each catch the same memoised site() failure,
-     * which is one alert. rescue() because report() throws when logging fails.
-     */
+    /** Reports each failure once, though several fail-open callers catch it. rescue(): report() can throw. */
     public function report(Throwable $e): void
     {
         if (! isset($this->reported[$e])) {

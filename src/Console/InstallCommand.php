@@ -8,11 +8,11 @@ use Illuminate\Console\Command;
 use Illuminate\Filesystem\Filesystem;
 use Symfony\Component\Console\Attribute\AsCommand;
 
-/** @internal The command is the API: seo:install. */
+/** @internal The command is the API. */
 #[AsCommand(name: 'seo:install', description: 'Publish config/seo.php and delete the public/ files that would hide the package routes')]
 final class InstallCommand extends Command
 {
-    /** What the package's routes serve: a copy in public/ is served by the web server before the route runs. */
+    /** The web server serves a public/ copy of these before the package's route runs. */
     public const array SHADOWS = ['robots.txt', 'sitemap.xml', 'indexnow-key.txt'];
 
     /** laravel/laravel's public/robots.txt: nothing in it to keep. */
@@ -23,7 +23,7 @@ final class InstallCommand extends Command
         $config = $this->laravel->configPath('seo.php');
         $existing = $files->exists($config) ? (array)$files->getRequire($config) : [];
 
-        // ralphjsmit/laravel-seo's shape. vendor:publish never overwrites it, and no Site builds from it.
+        // ralphjsmit/laravel-seo's shape: vendor:publish never overwrites it, and no Site builds from it.
         if (array_key_exists('model', $existing) || ! is_scalar($existing['image'] ?? '')) {
             $this->fail('config/seo.php belongs to another package, which reads the same config key: remove that package and its config/seo.php, then run seo:install again.');
         }
