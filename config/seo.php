@@ -47,17 +47,4 @@ return [
 
     // Serve /robots.txt, /sitemap.xml, /sitemap-{n}.xml and /indexnow-key.txt. false, null or '': your own routes serve them.
     'routes' => true,
-
-    // Language codes, e.g. ['en', 'fr', 'zh-Hant']. The first is the default: the bare URL and x-default. Fewer than
-    // two: Route::localized() registers plain routes, nothing else runs.
-    'locales' => [],
-
-    // false: only a copy's URL sets the language; no session, account, POST /locale or entry redirect.
-    'remember_locale' => true,
-
-    // The signed-in user's attribute holding their language, which the package reads and saves. null: session only.
-    'user_locale' => null,
-
-    // Route names whose default copy sends a visitor arriving from outside the site to their language's copy.
-    'entry_redirect' => [],
 ];

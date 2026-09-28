@@ -5,15 +5,9 @@ declare(strict_types=1);
 namespace Seo\Tests;
 
 use Illuminate\Contracts\Foundation\Application;
-use Illuminate\Contracts\Http\Kernel;
-use Illuminate\Foundation\Http\Kernel as HttpKernel;
-use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
-use Seo\Http\ApplyLocale;
-use Seo\Http\ResolveLocale;
-use Seo\Locales;
 use Seo\Page;
 use Seo\ParsedPage;
 use Seo\SeoServiceProvider;
@@ -161,66 +155,5 @@ final class ConfigTest extends TestCase
         $site = $this->seo()->site();
 
         $this->assertSame(['From config', null], [$site->name, $site->image]);
-    }
-
-    /** @return iterable<string, array{mixed, string}> config, message */
-    public static function malformedLocales(): iterable
-    {
-        yield 'a duplicate code' => [['en', 'fr', 'en'], 'seo.locales: [en] is listed twice.'];
-        yield 'a malformed code' => [['en', 'EN_us'], '[EN_us] is not an hreflang code'];
-        yield "0.3.0's code => name" => [['fr' => 'Français', 'en' => ''], 'list the codes only'];
-        yield 'a code that is not a string' => [['en', 1], "seo.locales: list the codes only, default first, e.g. ['en', 'fr']; label them with your own translations."];
-        yield 'codes and names mixed' => [['en', 'fr' => 'Français'], "seo.locales: list the codes only, default first, e.g. ['en', 'fr']; label them with your own translations."];
-        yield 'not a list' => ['en,fr', "seo.locales: list the codes only, default first, e.g. ['en', 'fr']; label them with your own translations."];
-    }
-
-    #[DataProvider('malformedLocales')]
-    public function test_malformed_locales_throw(mixed $locales, string $message): void
-    {
-        config(['seo.locales' => $locales]);
-
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage($message);
-
-        Locales::configured();
-    }
-
-    public function test_the_first_of_two_or_more_locales_is_the_default_and_one_false_or_null_is_none(): void
-    {
-        config(['seo.locales' => ['fr', 'en']]);
-        $this->assertEquals(new Locales(['fr', 'en'], 'fr'), Locales::configured());
-
-        config(['seo.locales' => ['en']]);
-        $this->assertNull(Locales::configured());
-
-        config(['seo.locales' => false]);
-        $this->assertNull(Locales::configured());
-
-        config(['seo.locales' => null]);
-        $this->assertNull(Locales::configured());
-    }
-
-    public function test_a_list_with_gaps_reads_its_codes_in_order(): void
-    {
-        config(['seo.locales' => array_filter(['fr', '', 'en'])]);
-
-        $this->assertEquals(new Locales(['fr', 'en'], 'fr'), Locales::configured());
-    }
-
-    public function test_one_language_registers_no_middleware_and_no_switch_route(): void
-    {
-        $kernel = $this->app->make(Kernel::class);
-        assert($kernel instanceof HttpKernel);
-
-        $this->assertNotContains(ResolveLocale::class, $kernel->getMiddlewareGroups()['web']);
-        $this->assertNotContains(ApplyLocale::class, $kernel->getMiddlewareGroups()['web']);
-        $this->assertFalse(Route::has('seo.locale'));
-    }
-
-    public function test_one_language_lists_none_and_offers_none(): void
-    {
-        $this->assertSame([], $this->seo()->languages());
-        $this->assertNull($this->seo()->accountLanguage());
-        $this->assertNull($this->seo()->accountLanguageOffer());
     }
 }

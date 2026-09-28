@@ -1,3 +1,4 @@
-# For vendor/bin/testbench (route:cache in LocalizedRoutesTest): its cached package manifest can miss this package.
+# For Larastan, which boots the app through Testbench: without the provider it sees neither the seo:: views nor the
+# commands' options.
 providers:
   - Seo\SeoServiceProvider

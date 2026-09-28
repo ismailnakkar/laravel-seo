@@ -6,22 +6,21 @@ namespace Seo\Tests;
 
 use Closure;
 use Illuminate\Contracts\View\View;
-use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Http\Middleware\PreventRequestsDuringMaintenance;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\PendingCommand;
 use Illuminate\Testing\TestResponse;
 use Orchestra\Testbench\TestCase as BaseTestCase;
-use Seo\Locales;
 use Seo\Page;
 use Seo\Seo;
 use Seo\SeoServiceProvider;
 use Seo\Site;
 use Seo\SitemapEntry;
+use Seo\Tests\Fixtures\SetLocale;
 use Symfony\Component\HttpFoundation\Response;
 
 abstract class TestCase extends BaseTestCase
@@ -157,50 +156,44 @@ abstract class TestCase extends BaseTestCase
     }
 
     /**
-     * The fixture pages inside Route::localized(), replacing the unlocalized routes on the same URIs.
+     * $paths in every language, $codes[0]'s bare and the others' under their code, each copy setting its locale as a
+     * localization package does; with a fake alternatesUsing() closure answering for exactly these routes, and null
+     * for any other. The routes on the same URIs are replaced.
      *
      * @param  list<string>  $codes  the first is the default
+     * @param  list<string>  $paths
+     * @param  Closure|null  $action  null: the fixture page
      */
-    protected function withLocales(array $codes = ['en', 'fr', 'ar', 'es']): Locales
+    protected function withAlternates(array $codes = ['en', 'fr', 'ar', 'es'], array $paths = self::PAGES, ?Closure $action = null): void
     {
-        $this->withLocalizedRoutes($codes, function (Router $router): void {
-            foreach (static::PAGES as $path) {
-                $router->get($path, $this->renderFixturePage(...));
-            }
-        });
-
-        return new Locales($codes, $codes[0]);
-    }
-
-    /** @param list<string> $codes the first is the default */
-    protected function withLocalizedRoutes(array $codes, Closure $routes): void
-    {
-        config(['seo.locales' => $codes]);
+        $default = $codes[0];
         $router = $this->app->make(Router::class);
-        $router->middleware('web')->group(static fn (Router $router) => $router->localized($routes));
-        $router->getRoutes()->refreshNameLookups();
-        $router->getRoutes()->refreshActionLookups();
-    }
+        $uris = [];
 
-    /** The fixture User's table. */
-    protected function createUsersTable(): void
-    {
-        Schema::create('users', static function (Blueprint $table): void {
-            $table->id();
-            $table->string('name')->default('');
-            $table->string('locale', 20)->nullable();
-            $table->string('password')->nullable();
-            $table->rememberToken();
-            $table->timestamps();
-        });
-    }
+        // Default last, as a localization package registers them: a default route opening with {page} would catch /fr/….
+        foreach ([...array_slice($codes, 1), $default] as $code) {
+            foreach ($paths as $path) {
+                $uri = ($code === $default ? '' : "{$code}/") . ltrim($path, '/');
+                $uris[] = $router->middleware(['web', SetLocale::class . ":{$code}"])->get($uri, $action ?? $this->renderFixturePage(...))->uri();
+            }
+        }
 
-    /** The fixture Admin's table, which has no `locale`. */
-    protected function createAdminsTable(): void
-    {
-        Schema::create('admins', static function (Blueprint $table): void {
-            $table->id();
-            $table->timestamps();
+        $this->seo()->alternatesUsing(static function (Route $route, string $path) use ($codes, $default, $uris): ?array {
+            if (! in_array($route->uri(), $uris, true)) {
+                return null;
+            }
+
+            // The router matched the decoded path, so /%66r/faq is the fr copy.
+            [$first, $rest] = explode('/', ltrim($path, '/'), 2) + [1 => ''];
+            $code = rawurldecode($first);
+
+            if ($code === $default || ! in_array($code, $codes, true)) {
+                [$code, $rest] = [$default, ltrim($path, '/')];
+            }
+
+            $to = static fn (string $c): string => $c === $default ? "/{$rest}" : rtrim("/{$c}/{$rest}", '/');
+
+            return ['path' => $to($code), 'alternates' => array_combine($codes, array_map($to, $codes))];
         });
     }
 }

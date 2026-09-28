@@ -5,19 +5,19 @@ declare(strict_types=1);
 namespace Seo\Tests;
 
 use Illuminate\Http\Request;
-use InvalidArgumentException;
+use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
-use Seo\Locales;
+use RuntimeException;
 use Seo\Page;
 use Seo\ParsedPage;
 use Seo\Robots;
 
 final class HreflangTest extends TestCase
 {
-    public function test_every_locale_url_emits_the_identical_set_in_codes_order_with_x_default_last(): void
+    public function test_every_alternate_emits_the_closures_set_in_its_order_with_x_default_last(): void
     {
         $this->withSite();
-        $this->withLocales();
+        $this->withAlternates();
 
         $expected = [
             'en'        => 'http://localhost/faq',
@@ -44,13 +44,26 @@ final class HreflangTest extends TestCase
         }
     }
 
-    public function test_an_encoded_locale_prefix_emits_its_plain_spellings_set_and_canonical(): void
+    public function test_x_default_is_the_closures_first_alternate(): void
     {
-        // The router matches the rawurldecoded path, so these reach the fr copy.
         $this->withSite();
-        $this->withLocales();
+        $this->withAlternates(['fr', 'en', 'zh-Hant']);
 
-        foreach (['/%66r/faq' => '/faq', '/fr%2Ffaq' => '/faq', '/fr%2ffaq/' => '/faq', '/%66r' => ''] as $url => $path) {
+        $this->assertSame([
+            'fr'        => 'http://localhost/faq',
+            'en'        => 'http://localhost/en/faq',
+            'zh-Hant'   => 'http://localhost/zh-Hant/faq',
+            'x-default' => 'http://localhost/faq',
+        ], $this->alternates('/zh-Hant/faq', new Page(title: 'FAQ')));
+    }
+
+    public function test_the_canonical_names_the_closures_path(): void
+    {
+        // The router matches the decoded path, so /%66r/faq reaches the fr copy; the closure names it /fr/faq.
+        $this->withSite();
+        $this->withAlternates();
+
+        foreach (['/%66r/faq' => '/faq', '/%66r' => ''] as $url => $path) {
             $page = new Page(title: 'FAQ');
             $expected = [
                 'en'        => 'http://localhost' . ($path ?: '/'),
@@ -65,16 +78,12 @@ final class HreflangTest extends TestCase
         }
     }
 
-    public function test_each_alternate_is_self_canonical_including_the_paginated_combination(): void
+    public function test_every_alternate_carries_the_page_query_and_is_self_canonical(): void
     {
         $this->withSite();
-        $this->withLocales();
-
-        foreach (['/ar/faq' => new Page(title: 'FAQ'), '/fr' => new Page(title: 'Home'), '/fr/payment-proof?page=2&utm_source=x' => new Page(title: 'Payment proof', paginated: true)] as $url => $page) {
-            foreach ($this->alternates($url, $page) as $hreflang => $href) {
-                $this->assertSame($href, $this->canonicalOf($href, $page), "{$hreflang} {$href}");
-            }
-        }
+        $this->withAlternates();
+        $page = new Page(title: 'Payment proof', paginated: true);
+        $alternates = $this->alternates('/fr/payment-proof?page=2&utm_source=x', $page);
 
         $this->assertSame([
             'en'        => 'http://localhost/payment-proof?page=2',
@@ -82,59 +91,84 @@ final class HreflangTest extends TestCase
             'ar'        => 'http://localhost/ar/payment-proof?page=2',
             'es'        => 'http://localhost/es/payment-proof?page=2',
             'x-default' => 'http://localhost/payment-proof?page=2',
-        ], $this->alternates('/fr/payment-proof?page=2&utm_source=x', new Page(title: 'Payment proof', paginated: true)));
+        ], $alternates);
+
+        foreach ($alternates as $hreflang => $href) {
+            $this->assertSame($href, $this->canonicalOf($href, $page), "{$hreflang} {$href}");
+        }
     }
 
-    public function test_there_are_no_alternates_outside_route_localized_with_an_override_or_on_a_noindex_page(): void
+    public function test_there_are_no_alternates_without_a_closure_off_its_routes_with_an_override_or_on_a_noindex_page_or_host(): void
     {
-        $site = $this->withSite();
+        $this->withSite();
         $this->assertSame([], $this->alternates('/faq', new Page(title: 'FAQ')));
-        $this->assertSame([], $site->alternates(Request::create('/fr/faq')));
 
-        $this->withLocales();
+        $this->withAlternates(paths: ['/faq']);
+        $this->assertSame([], $this->alternates('/payment-proof', new Page(title: 'Payment proof')));
         $this->assertSame([], $this->alternates('/fr/faq', new Page(title: 'FAQ', canonical: 'https://short.test/x')));
         $this->assertSame([], $this->alternates('/fr/faq', new Page(title: 'FAQ', robots: Robots::none)));
+        $this->assertSame([], $this->alternates('http://dl.test/fr/faq', new Page(title: 'FAQ')));
     }
 
-    public function test_script_and_region_codes_are_path_segments_and_hreflang_values(): void
+    public function test_a_returned_host_relative_path_stays_on_the_site(): void
     {
-        // Google documents zh-Hans and zh-Hant: script subtags, optionally with a region.
         $this->withSite();
-        $this->withLocales(['en-GB', 'zh-Hant', 'zh-Hant-TW']);
+        $this->seo()->alternatesUsing(static fn (): array => ['path' => '//evil.test/x', 'alternates' => ['en' => '//evil.test/x', 'fr' => '//evil.test/fr/x']]);
+        $page = new Page(title: 'FAQ');
 
         $this->assertSame([
-            'en-GB'      => 'http://localhost/faq',
-            'zh-Hant'    => 'http://localhost/zh-Hant/faq',
-            'zh-Hant-TW' => 'http://localhost/zh-Hant-TW/faq',
-            'x-default'  => 'http://localhost/faq',
-        ], $this->alternates('/zh-Hant-TW/faq', new Page(title: 'FAQ')));
+            'en'        => 'http://localhost/evil.test/x',
+            'fr'        => 'http://localhost/evil.test/fr/x',
+            'x-default' => 'http://localhost/evil.test/x',
+        ], $this->alternates('/faq', $page));
+        $this->assertSame('http://localhost/evil.test/x', $this->canonicalOf('/faq', $page));
     }
 
-    /** @return iterable<string, array{list<mixed>, string}> */
-    public static function badLocales(): iterable
+    /** @return array<string, array{string}> */
+    public static function notPaths(): array
     {
-        yield 'a language name' => [['en', 'english'], 'en'];
-        yield 'a bare region' => [['en', '-GB'], 'en'];
-        yield 'upper-case language' => [['EN'], 'EN'];
-        yield 'lower-case region' => [['en', 'en-gb'], 'en'];
-        yield 'not a string' => [['en', 2], 'en'];
-        yield 'a duplicate' => [['en', 'fr', 'en'], 'en'];
-        yield 'no codes' => [[], 'en'];
-        yield 'a default not in codes' => [['en', 'fr'], 'de'];
-        yield 'a code with a trailing newline' => [['en', "fr\n"], 'en'];
-        yield 'lower-case script' => [['zh', 'zh-hant'], 'zh'];
-        yield 'a script after the region' => [['zh', 'zh-TW-Hant'], 'zh'];
-        yield 'x-default' => [['en', 'x-default'], 'en'];
+        return ['a URL' => ['https://evil.test/x'], 'a query' => ['/faq?lang=fr'], 'a fragment' => ['/faq#top']];
     }
 
-    /** @param list<mixed> $codes */
-    #[DataProvider('badLocales')]
-    public function test_malformed_locales_throw(array $codes, string $default): void
+    #[DataProvider('notPaths')]
+    public function test_a_returned_url_query_or_fragment_throws(string $value): void
     {
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('seo.locales: ');
+        $this->withSite();
+        $this->seo()->alternatesUsing(static fn (): array => ['path' => '/faq', 'alternates' => ['en' => '/faq', 'fr' => $value]]);
+        $this->withoutExceptionHandling();
 
-        new Locales($codes, $default);
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage("[{$value}] is not a path");
+
+        $this->visit('/faq', new Page(title: 'FAQ'));
+    }
+
+    public function test_a_closure_that_throws_propagates(): void
+    {
+        $this->withSite();
+        $this->seo()->alternatesUsing(static fn (): never => throw new RuntimeException('Resolver down.'));
+        $this->withoutExceptionHandling();
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Resolver down.');
+
+        $this->visit('/faq', new Page(title: 'FAQ'));
+    }
+
+    public function test_a_request_without_a_matched_route_never_calls_the_closure(): void
+    {
+        $site = $this->withSite();
+        $calls = 0;
+        $this->seo()->alternatesUsing(static function () use (&$calls): array {
+            $calls++;
+
+            return ['path' => '/faq', 'alternates' => ['en' => '/faq']];
+        });
+        $request = Request::create('/fr/faq');
+
+        $this->assertSame([], $site->alternates($request));
+        $this->assertSame('http://localhost/fr/faq', $site->canonical($request));
+        $this->assertSame(0, $calls);
     }
 
     /** @return array<string, string> hreflang => href */

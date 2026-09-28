@@ -31,7 +31,7 @@ class Seo
 
     private ?Closure $sitemapResolver = null;
 
-    private ?Closure $userLocaleSaver = null;
+    private ?Closure $alternatesResolver = null;
 
     public function __construct(private readonly Router $router) {}
 
@@ -56,20 +56,51 @@ class Seo
     }
 
     /**
-     * How a user's language is saved, in place of the package's own Eloquent write: fn (User $user, string $code) =>
-     * app(Users::class)->setLocale($user, $code). The language is still read from config('seo.user_locale'), and the
-     * request's user instance synced afterwards. Receives whichever guard's model is signed in when that model has
-     * the column, so type-hint accordingly.
+     * A localization package's answer to "what is each language's path for this route and path?", for canonicals,
+     * hreflang and sitemap expansion. fn (Route $route, string $path): ?array{path: string, alternates: array<string,
+     * string>}: null when the route is not localized; else `path`, this page's own path as its canonical names it, and
+     * `alternates`, hreflang code => path in hreflang order, the default (x-default) first. Paths only: SEO adds the host
+     * and the query.
      */
-    public function saveUserLocaleUsing(Closure $save): void
+    public function alternatesUsing(Closure $resolver): void
     {
-        $this->userLocaleSaver = $save;
+        $this->alternatesResolver = $resolver;
     }
 
-    /** @internal */
-    public function userLocaleSaver(): ?Closure
+    /**
+     * @internal
+     *
+     * @return array{path: string, alternates: non-empty-array<string, string>}|null
+     *
+     * @throws LogicException a returned value is not a path
+     */
+    public function alternatesFor(?Route $route, string $path): ?array
     {
-        return $this->userLocaleSaver;
+        if ($route === null || $this->alternatesResolver === null) {
+            return null;
+        }
+
+        $resolved = ($this->alternatesResolver)($route, $path);
+
+        if ($resolved === null) {
+            return null;
+        }
+
+        if (! is_array($resolved) || ! array_key_exists('path', $resolved) || ! is_array($resolved['alternates'] ?? null) || $resolved['alternates'] === []) {
+            throw new LogicException('Seo::alternatesUsing(): the closure returns null or [path => string, alternates => non-empty [code => path]].');
+        }
+
+        // One leading slash: `//host` would leave the site through Site::to(). A leading scheme, not "contains ://":
+        // the closure echoes the request path, and `/x/https://y.test` is one.
+        $clean = static function (mixed $value): string {
+            if (! is_string($value) || preg_match('~^[a-z][a-z0-9+.-]*://~i', $value) === 1 || str_contains($value, '?') || str_contains($value, '#')) {
+                throw new LogicException('Seo::alternatesUsing(): [' . (is_string($value) ? $value : get_debug_type($value)) . '] is not a path.');
+            }
+
+            return '/' . ltrim($value, '/');
+        };
+
+        return ['path' => $clean($resolved['path']), 'alternates' => array_map($clean, $resolved['alternates'])];
     }
 
     /**
@@ -116,60 +147,6 @@ class Seo
     }
 
     /**
-     * The configured languages in config order, for a switcher. [] below two.
-     *
-     * @return list<Language>
-     */
-    public function languages(): array
-    {
-        $locales = Locales::configured();
-
-        if ($locales === null) {
-            return [];
-        }
-
-        /** @var Application $app */
-        $app = Container::getInstance();
-
-        return array_map(static fn (string $code): Language => new Language($code, $code === $app->getLocale()), $locales->codes);
-    }
-
-    /**
-     * The signed-in user's saved language; null for a guest, an account without one or with a code outside `locales`,
-     * and with remember_locale off.
-     */
-    public function accountLanguage(): ?string
-    {
-        /** @var Application $app */
-        $app = Container::getInstance();
-        $locales = Locales::configured();
-
-        if ($locales === null || $app->make('config')->get('seo.remember_locale') === false) {
-            return null;
-        }
-
-        // The guard, not request(): a request bound before the auth provider registered has no user resolver.
-        return UserLocale::of($app->make('auth')->guard()->user(), $locales);
-    }
-
-    /**
-     * The language on screen while accountLanguage() is another, for a "use it for your account too?" prompt; null
-     * otherwise (an account without one is filled instead). The prompt's two answers post this code or
-     * accountLanguage() to route('seo.locale'), so either leaves the page and the account in one language.
-     */
-    public function accountLanguageOffer(): ?Language
-    {
-        /** @var Application $app */
-        $app = Container::getInstance();
-        $current = $app->getLocale();
-        $account = $this->accountLanguage();
-
-        return $account === null || $account === $current || ! in_array($current, Locales::configured()->codes ?? [], true)
-            ? null
-            : new Language($current, true);
-    }
-
-    /**
      * Memoised per Request and locale when a Request is given (a siteUsing() closure may read the locale, and the
      * locale can change after the first build within a request), a failure too, rethrown as the same instance; rebuilt
      * on every call without one.
@@ -206,8 +183,8 @@ class Seo
     /**
      * The sitemapUsing() entries, then the config('seo.sitemap') locs they do not list: on a shared loc the resolver's
      * entry, with its lastmod, wins. Lazy: holds the config list only. Absolute locs on Site::host(), path and query
-     * percent-encoded per RFC 3986 (existing escapes kept). A loc on any copy of a Route::localized() route expands to
-     * one per locale, default first.
+     * percent-encoded per RFC 3986 (existing escapes kept). A loc on a route the alternatesUsing() closure localizes
+     * expands to one per alternate, in its order.
      *
      * @return Generator<int, SitemapEntry>
      *
@@ -359,16 +336,15 @@ class Seo
         }, self::configValues());
     }
 
-    /** @return Closure(string): non-empty-list<string> a loc's URLs, one per locale on a localized route */
+    /** @return Closure(string): non-empty-list<string> a loc's URLs, one per alternatesUsing() alternate */
     private function expander(Site $site): Closure
     {
-        // The route the router would pick, fallbacks last, expands the loc only if localized; an app without one never
+        // The route the router would pick, fallbacks last, expands the loc; an app without alternatesUsing() never
         // builds a probe. Matched, never bound: RouteCollection::match() would overwrite the current route's parameters.
-        $routes = $this->router->getRoutes()->get('GET');
+        $routes = $this->alternatesResolver === null ? [] : $this->router->getRoutes()->get('GET');
         usort($routes, static fn (Route $a, Route $b): int => $a->isFallback <=> $b->isFallback);
-        $routes = array_any($routes, static fn (Route $route): bool => LocalizedRoute::of($route) !== null) ? $routes : [];
 
-        return static function (string $loc) use ($site, $routes): array {
+        return function (string $loc) use ($site, $routes): array {
             $loc = $site->to($loc);
             $parts = parse_url($loc);
 
@@ -381,15 +357,13 @@ class Seo
             $path = '/' . trim($uri->getPath(), '/');
             $query = $uri->getQuery() === '' ? '' : '?' . $uri->getQuery();
             $probe = $routes === [] ? null : Request::create($site->to($path) . $query);
-            $localized = $probe === null ? null : LocalizedRoute::of(array_find($routes, static fn (Route $route): bool => $route->matches($probe)));
+            $alternates = $probe === null ? null : $this->alternatesFor(array_find($routes, static fn (Route $route): bool => $route->matches($probe)), $path);
 
-            if ($localized === null) {
+            if ($alternates === null) {
                 return [$site->to($path) . $query];
             }
 
-            $codes = [$localized->locales->default, ...array_diff($localized->locales->codes, [$localized->locales->default])];
-
-            return array_map(static fn (string $code): string => $site->to($localized->path($path, $code)) . $query, $codes);
+            return array_values(array_map(static fn (string $p): string => $site->to($p) . $query, $alternates['alternates']));
         };
     }
 

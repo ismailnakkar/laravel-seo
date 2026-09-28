@@ -1,14 +1,12 @@
 {
     "name": "ismailnakkar/laravel-seo",
-    "description": "Head tags, robots.txt, sitemaps and IndexNow for Laravel, plus multilingual localization with localized routes and hreflang, crawlability test helpers and a live check.",
+    "description": "Head tags, canonical URLs, robots.txt, sitemaps, IndexNow and crawlability tests for Laravel.",
     "keywords": [
         "laravel",
         "seo",
         "robots",
         "sitemap",
         "indexnow",
-        "localization",
-        "multilingual",
         "hreflang"
     ],
     "homepage": "https://github.com/ismailnakkar/laravel-seo",
@@ -26,7 +24,6 @@
         "php": "^8.4",
         "ext-dom": "*",
         "guzzlehttp/psr7": "^2.9 || ^3.0",
-        "jaybizzle/crawler-detect": "^1.3",
         "laravel/framework": "^12.61.1 || ^13.12",
         "symfony/polyfill-intl-idn": "^1.18"
     },
@@ -36,8 +33,10 @@
         "laravel/pint": "^1.19",
         "orchestra/testbench": "^10.0 || ^11.0",
         "phpunit/phpunit": "^11.5 || ^12.0 || ^13.0",
-        "symfony/translation": "^6.4.3 || ^7.0 || ^8.0",
-        "symfony/translation-contracts": "^3.5"
+        "symfony/translation": "^6.4.3 || ^7.0 || ^8.0"
+    },
+    "suggest": {
+        "ismailnakkar/laravel-localization": "Localized routes and the visitor's language; plugs hreflang and sitemap alternates in with no configuration."
     },
     "autoload": {
         "psr-4": {

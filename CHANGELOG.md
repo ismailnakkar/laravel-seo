@@ -7,6 +7,39 @@ All notable changes to `ismailnakkar/laravel-seo` are listed here. The format fo
 While 0.x, a breaking change bumps the minor and a patch never breaks. Semver covers what the README documents;
 anything marked `@internal` may change in any release.
 
+## [0.5.0] - 2026-09-28
+
+Every step from 0.4 is in [UPGRADE.md](UPGRADE.md#from-04-to-05).
+
+### Changed
+
+- **Breaking:** localized routes and the visitor's and account's language moved to a new package,
+  [ismailnakkar/laravel-localization](https://github.com/ismailnakkar/laravel-localization), with the same behaviour.
+  laravel-seo is SEO only. The renames:
+  - `Seo\Locales`, `Seo\LocalizedRoute`, `Seo\Language` and `Seo\UserLocale` are `Localization\Locales`,
+    `Localization\LocalizedRoute`, `Localization\Language` and `Localization\UserLocale`.
+  - `Seo\Http\ResolveLocale`, `ApplyLocale`, `SwitchLocale` and `RedirectToDefaultCopy` are in `Localization\Http\`.
+  - `Seo::languages()`, `accountLanguage()`, `accountLanguageOffer()` and `saveUserLocaleUsing()` are on
+    `Localization\Localization`, same names.
+  - `seo.locales`, `seo.remember_locale`, `seo.user_locale` and `seo.entry_redirect` are `localization.*` in
+    `config/localization.php`, same defaults, published with `--tag=localization-config`.
+  - The switcher route `seo.locale` is `localization.switch`, still `POST /locale`.
+  - A copy's route name `seo.{code}.{name}` is `localization.{code}.{name}`.
+  - The route action keys `seo_locale` and `seo_default_redirect` are `localization_locale` and
+    `localization_default_redirect`.
+  - The session key `seo.browsing` is `localization.browsing`, so the language each session browses is forgotten once.
+  - `seo:check`'s `entry_redirect` and `user_locale` rows are `php artisan localization:check`.
+
+### Added
+
+- `Seo::alternatesUsing()`: a closure that gives, for a route and a path, the page's canonical path and each language's
+  path, for hreflang and sitemap expansion. laravel-localization registers it; any other localization setup can. See
+  the README's [Multilingual sites](README.md#multilingual-sites).
+
+### Removed
+
+- The `jaybizzle/crawler-detect` dependency.
+
 ## [0.4.2] - 2026-09-27
 
 ### Added
@@ -65,4 +98,5 @@ Every step from 0.3 is in [UPGRADE.md](UPGRADE.md#from-03-to-04).
 
 0.3.3 and earlier: see [UPGRADE.md](UPGRADE.md).
 
+[0.5.0]: https://github.com/ismailnakkar/laravel-seo/compare/v0.4.2...HEAD
 [0.4.0]: https://github.com/ismailnakkar/laravel-seo/compare/v0.3.3...HEAD

@@ -9,13 +9,15 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
-/** A member's refusal ranked after the session check, like cuty's gate: its body is the language it renders in. */
-final class RequireRecentSignIn
+/** A language copy's locale, as a localization package sets it, so <html lang> follows the URL. */
+final class SetLocale
 {
     public function __construct(private readonly Application $app) {}
 
-    public function handle(Request $request, Closure $next): Response
+    public function handle(Request $request, Closure $next, string $locale): Response
     {
-        return new Response($this->app->getLocale(), 423);
+        $this->app->setLocale($locale);
+
+        return $next($request);
     }
 }

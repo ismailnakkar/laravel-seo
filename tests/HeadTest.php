@@ -50,7 +50,7 @@ final class HeadTest extends TestCase
     public function test_a_page_that_never_calls_page_is_indexable_by_default(): void
     {
         $this->withSite();
-        $this->withLocales();
+        $this->withAlternates();
 
         $this->visit('/fr/reset-password?utm_source=x')
             ->assertOk()
@@ -265,7 +265,7 @@ final class HeadTest extends TestCase
     public function test_a_noindex_page_has_no_canonical_hreflang_or_og_url(): void
     {
         $this->withSite();
-        $this->withLocales();
+        $this->withAlternates();
 
         $this->visit('/fr/faq', new Page(title: 'FAQ', robots: Robots::noindex))
             ->assertSee('<meta name="robots" content="noindex, follow">', false)
@@ -290,7 +290,7 @@ final class HeadTest extends TestCase
     public function test_an_indexable_page_on_a_noindex_host_renders_noindex_nofollow_and_no_canonical(): void
     {
         $this->withSite();
-        $this->withLocales();
+        $this->withAlternates();
 
         $this->visit('http://dl.test/fr/faq', new Page(title: 'FAQ'))
             ->assertSee('<meta name="robots" content="noindex, nofollow">', false)
@@ -409,7 +409,7 @@ final class HeadTest extends TestCase
     public function test_the_verification_tag_and_the_graph_render_on_the_home_page_with_any_query(): void
     {
         $this->withSite(['google_verification' => 'g-code']);
-        $this->withLocales();
+        $this->withAlternates();
 
         foreach (['/', '/?lang=fr', '/?utm_source=x'] as $url) {
             $response = $this->visit($url, new Page(title: 'UpFiles', suffixSiteName: false))
@@ -430,7 +430,7 @@ final class HeadTest extends TestCase
     {
         $this->withSite(['google_verification' => 'g-code', 'index_by_default' => false]);
 
-        $this->withLocales();
+        $this->withAlternates();
 
         // Google reads the site name and verification from the domain root, not a locale's home.
         $pages = [
@@ -796,7 +796,7 @@ final class HeadTest extends TestCase
     public function test_the_hreflang_block_renders_in_emission_order(): void
     {
         $this->withSite(['name' => 'cuty.io', 'title_separator' => ' | ', 'image' => '/og.png']);
-        $this->withLocales(['en', 'fr']);
+        $this->withAlternates(['en', 'fr']);
 
         $this->visit('/fr/faq', new Page(title: "Conditions d'utilisation", description: 'Desc.'))->assertSeeInOrder([
             '<html lang="fr">',

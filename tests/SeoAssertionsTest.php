@@ -9,7 +9,6 @@ use DateTimeImmutable;
 use Illuminate\Auth\GenericUser;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
-use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use PHPUnit\Framework\AssertionFailedError;
@@ -20,7 +19,6 @@ use Seo\ParsedPage;
 use Seo\Robots;
 use Seo\SitemapEntry;
 use Seo\Testing\SeoAssertions;
-use Seo\Tests\Fixtures\NegotiateLocale;
 
 final class SeoAssertionsTest extends TestCase
 {
@@ -252,7 +250,7 @@ final class SeoAssertionsTest extends TestCase
     public function test_hreflang_alternates_may_share_a_title_and_description(): void
     {
         // Uniqueness holds per <html lang>: a cognate (FAQ) is right in every language.
-        $this->withLocales(['en', 'fr']);
+        $this->withAlternates(['en', 'fr']);
         $this->fixturePage = static fn (): Page => new Page(title: 'FAQ', description: 'Questions and answers.');
         $this->withSitemap([new SitemapEntry('/faq', new DateTimeImmutable('2026-09-01T08:00:00+00:00'))]);
 
@@ -359,7 +357,7 @@ final class SeoAssertionsTest extends TestCase
 
     public function test_assert_hreflang_reciprocal_passes_on_path_locales(): void
     {
-        $this->withLocales();
+        $this->withAlternates();
         $this->fixturePage = static fn (): Page => new Page(title: 'Listing', paginated: true);
 
         $this->assertHreflangReciprocal('/faq');
@@ -370,13 +368,12 @@ final class SeoAssertionsTest extends TestCase
 
     public function test_assert_hreflang_reciprocal_fails_when_a_copy_renders_the_accept_language_locale(): void
     {
-        // Route middleware inside the closure runs after the match set the URL's locale, and overrides it.
-        $this->withLocalizedRoutes(['en', 'fr', 'ar', 'es'], function (Router $router): void {
-            $router->middleware(NegotiateLocale::class)->get('negotiated', function () {
-                $this->seo()->page(title: 'Terms');
+        // Deliberately wrong, like cuty's pre-fix middleware: the browser's language overrides the URL's.
+        $this->withAlternates(['en', 'fr', 'ar', 'es'], ['negotiated'], function (Request $request) {
+            $this->app->setLocale((string)$request->getPreferredLanguage(['en', 'fr', 'ar', 'es']));
+            $this->seo()->page(title: 'Terms');
 
-                return view('page', ['lang' => $this->app->getLocale()]);
-            });
+            return view('page', ['lang' => $this->app->getLocale()]);
         });
 
         $this->assertFailsWith(
@@ -387,7 +384,7 @@ final class SeoAssertionsTest extends TestCase
 
     public function test_assert_hreflang_reciprocal_fails_when_a_variant_drops_an_alternate(): void
     {
-        $this->withLocales();
+        $this->withAlternates();
         // A canonical override drops the fr copy's hreflang block.
         $this->fixturePage = static fn (Request $request): Page => $request->getPathInfo() === '/fr/faq'
             ? new Page(title: 'FAQ', canonical: 'http://localhost/fr/faq')

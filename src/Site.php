@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Seo;
 
+use Illuminate\Container\Container;
 use Illuminate\Http\Request;
 use InvalidArgumentException;
 
@@ -127,33 +128,36 @@ final readonly class Site
             return $this->to($page->canonical);
         }
 
-        [$path, $query] = $this->pathAndPage($request, $page);
+        // getPathInfo() has already dropped /index.php.
+        $path = '/' . trim($request->getPathInfo(), '/');
+        // The closure normalises a language prefix as the router decoded it: /%66r/faq → /fr/faq.
+        $path = Container::getInstance()->make(Seo::class)->alternatesFor($request->route(), $path)['path'] ?? $path;
 
-        return $this->to($path) . $query;
+        return $this->to($path) . $this->pageQuery($request, $page);
     }
 
     /**
-     * @return array<string, string> hreflang => href in codes order, x-default last; [] outside Route::localized() or
-     *                               with a canonical override
+     * @return array<string, string> hreflang => href in the alternatesUsing() closure's order, x-default (its first)
+     *                               last; [] on a route it does not localize, or with a canonical override
      *
      * @internal
      */
     public function alternates(Request $request, ?Page $page = null): array
     {
-        $localized = LocalizedRoute::of($request->route());
-
-        if ($localized === null || $page?->canonical !== null) {
+        if ($page?->canonical !== null) {
             return [];
         }
 
-        [$path, $query] = $this->pathAndPage($request, $page);
-        $alternates = [];
+        $resolved = Container::getInstance()->make(Seo::class)->alternatesFor($request->route(), '/' . trim($request->getPathInfo(), '/'));
 
-        foreach ($localized->locales->codes as $code) {
-            $alternates[$code] = $this->to($localized->path($path, $code)) . $query;
+        if ($resolved === null) {
+            return [];
         }
 
-        return $alternates + ['x-default' => $alternates[$localized->locales->default]];
+        $query = $this->pageQuery($request, $page);
+        $alternates = array_map(fn (string $path): string => $this->to($path) . $query, $resolved['alternates']);
+
+        return $alternates + ['x-default' => reset($alternates)];
     }
 
     /**
@@ -189,18 +193,11 @@ final readonly class Site
         return preg_match('/[^\x00-\x7F]/', $host) === 1 ? (idn_to_ascii($host, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46) ?: null) : $host;
     }
 
-    /** @return array{string, string} */
-    private function pathAndPage(Request $request, ?Page $page): array
+    private function pageQuery(Request $request, ?Page $page): string
     {
-        // getPathInfo() has already dropped /index.php.
-        $path = '/' . trim($request->getPathInfo(), '/');
-        // Normalise the copy's prefix as the router decoded it: /%66r/faq → /fr/faq.
-        $localized = LocalizedRoute::of($request->route());
-        $path = $localized?->path($path, $localized->locale) ?? $path;
-
         // The canonical names the page Laravel's paginator serves: '+2' is page 2, '02' is page 1.
         $p = filter_var($request->query('page'), FILTER_VALIDATE_INT, ['options' => ['min_range' => 2]]);
 
-        return [$path, ($page->paginated ?? false) && $p !== false ? "?page={$p}" : ''];
+        return ($page->paginated ?? false) && $p !== false ? "?page={$p}" : '';
     }
 }
