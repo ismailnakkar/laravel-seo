@@ -88,6 +88,10 @@ Resolver entries come first and replace a config entry with the same URL. Set `l
 last change, never `now()`. Past 50,000 URLs `/sitemap.xml` becomes an index of `/sitemap-{n}.xml`. With nothing
 listed, `/sitemap.xml` is a 404.
 
+Sitemap responses are `private` and nothing is cached server-side: every `/sitemap-{n}.xml` request runs the resolver from
+the start up to chunk `n`. The last chunk and the `/sitemap.xml` index need a full pass over every entry, so the
+resolver runs to the end for them. If the resolver queries the database, cache its rows in the closure.
+
 ## robots.txt
 
 ```

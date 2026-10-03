@@ -7,6 +7,16 @@ All notable changes to `ismailnakkar/laravel-seo` are listed here. The format fo
 While 0.x, a breaking change bumps the minor and a patch never breaks. Semver covers what the README documents;
 anything marked `@internal` may change in any release.
 
+## [0.5.2] - 2026-10-03
+
+### Fixed
+
+- UPGRADE.md installs `laravel-localization:^0.3`, not `^0.1`.
+
+### Docs
+
+- The sitemap section says responses are not cached and how to cache a costly resolver.
+
 ## [0.5.1] - 2026-09-28
 
 ### Changed

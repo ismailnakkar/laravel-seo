@@ -34,7 +34,7 @@ The session key is reset: every language a 0.4 session holds is forgotten once, 
 guests to their browser.
 
 **3. Install laravel-localization** with laravel-seo in one step (it refuses laravel-seo 0.4):
-`composer require ismailnakkar/laravel-seo:^0.5 ismailnakkar/laravel-localization:^0.1`.
+`composer require ismailnakkar/laravel-seo:^0.5 ismailnakkar/laravel-localization:^0.3`.
 
 **4. Rebuild the caches**: `php artisan optimize`. Cached routes carry the old names.
 
